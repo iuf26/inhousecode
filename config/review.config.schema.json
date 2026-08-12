@@ -1,0 +1,68 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "inhousecode review configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "$schema": { "type": "string" },
+    "triggers": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "preCommit": { "type": "boolean" },
+        "agentStop": { "type": "boolean" }
+      }
+    },
+    "static": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "autofix": { "type": "boolean" },
+        "maxFixLoops": { "type": "integer", "minimum": 0, "maximum": 20 },
+        "fixSeverity": { "type": "string", "enum": ["all", "blocking"] },
+        "restageFixes": { "type": "boolean" },
+        "semgrepConfigs": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^[A-Za-z0-9._/-]+$" }
+        }
+      }
+    },
+    "ai": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "model": { "type": "string" },
+        "timeoutSec": { "type": "integer", "minimum": 30, "maximum": 3600 },
+        "autofixBlocking": { "type": "boolean" },
+        "maxFixLoops": { "type": "integer", "minimum": 0, "maximum": 10 },
+        "triageFindings": { "type": "boolean" },
+        "verifyIntent": { "type": "boolean" },
+        "impactAnalysis": { "type": "boolean" },
+        "critiqueModel": { "type": "string" },
+        "critiqueRounds": { "type": "integer", "minimum": 0, "maximum": 5 }
+      }
+    },
+    "agentStop": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "static": { "type": "boolean" },
+        "ai": { "type": "boolean" },
+        "maxTurns": { "type": "integer", "minimum": 1, "maximum": 20 }
+      }
+    },
+    "explain": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "autoLaunch": { "type": "boolean" },
+        "contextLines": { "type": "integer", "minimum": 0, "maximum": 25 },
+        "model": { "type": "string" }
+      }
+    },
+    "rulebook": { "type": "string" }
+  }
+}

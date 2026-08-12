@@ -1,0 +1,592 @@
+#!/usr/bin/env bash
+#
+# inhousecode - a two-phase review gate for AI-generated code.
+#
+#   Phase 1  deterministic Semgrep analysis with a bounded repair loop
+#   Phase 2  AI code review against the team's own rulebook
+#
+# See README.md for the reasoning behind the two phases.
+
+set -uo pipefail
+
+VERSION="1.0.0"
+EXIT_PASS=0
+EXIT_BLOCKED=1
+EXIT_USAGE=2
+
+SCRIPT_PATH="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+INHOUSECODE_HOME="$(cd -- "$SCRIPT_PATH/.." && pwd)"
+export INHOUSECODE_HOME
+
+# shellcheck source=../lib/common.sh
+source "$INHOUSECODE_HOME/lib/common.sh"
+
+usage() {
+  cat <<EOF
+inhousecode $VERSION - smart review gate for AI-generated code
+
+USAGE
+  inhousecode review [options]     run the review gates
+  inhousecode explain              open a session over the last findings
+  inhousecode init                 create .inhousecode/ in this repository
+  inhousecode install-hooks [...]  install the pre-commit and/or agent-stop hook
+  inhousecode uninstall-hooks      remove hooks installed by inhousecode
+  inhousecode doctor               check the local environment
+  inhousecode version
+
+REVIEW OPTIONS
+  --pr <id|url>       review a pull request; its base branch and head commit
+                      are resolved from GitHub or Azure DevOps automatically
+  --staged            review the git index (default)
+  --worktree          review uncommitted working-tree changes
+  --diff <base-ref>   review the commits this branch adds on top of <base-ref>
+                      (use when there is no PR yet, or no forge access)
+  --path <path>       review every file under a path
+  --mode <mode>       both | static | ai   (default: both)
+  --no-fix            report only; never edit files
+  --fix               allow repairs in --diff / --pr mode (off by default there)
+  --gate              non-interactive: no prompts, exit code is the verdict
+  --verbose           stream full agent logs
+
+INSTALL-HOOKS OPTIONS
+  --pre-commit        install the git pre-commit hook
+  --agent-stop        install the Copilot CLI agentStop hook
+  (default: whatever triggers.* says in the resolved configuration)
+
+ENVIRONMENT
+  COPILOT_BIN         explicit path to the Copilot CLI
+  INHOUSECODE_VERBOSE=1  same as --verbose
+EOF
+}
+
+require_repo() {
+  REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || {
+    fail "inhousecode: not inside a git repository."
+    exit $EXIT_USAGE
+  }
+  cd "$REPO_ROOT" || exit $EXIT_USAGE
+  export REPO_ROOT
+}
+
+# --- review ------------------------------------------------------------------
+
+TARGET_MODE="staged"
+TARGET_PATH=""
+GATE_MODE="both"
+GATE_ONLY=0
+NO_FIX=0
+FIX_REQUESTED=0
+# --diff / --pr mode: DIFF_BASE is what the user typed or what the forge
+# reported, DIFF_MERGE_BASE is the commit the branch actually forked from, and
+# DIFF_HEAD is the commit under review. Reviewing against the merge base and not
+# the base tip is what keeps unrelated commits landed on the base branch out of
+# scope. DIFF_HEAD is a resolved commit rather than the literal HEAD so a pull
+# request can be reviewed without checking it out.
+DIFF_BASE=""
+# Set when the base ref has already been resolved authoritatively (--pr mode,
+# where the forge named the branch and the remote-tracking ref is the truth).
+# A stale local branch of the same name must not be preferred over it.
+DIFF_BASE_REV=""
+DIFF_MERGE_BASE=""
+DIFF_HEAD="HEAD"
+# Where diff mode reads file content: the reviewed commit, or the working tree
+# once repairs are enabled and each round must see the previous round's fixes.
+DIFF_SOURCE="commit"
+PR_REFERENCE=""
+PR_ID=""
+PR_TITLE=""
+PR_URL=""
+PR_BASE_BRANCH=""
+
+parse_review_args() {
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --staged)   TARGET_MODE="staged" ;;
+      --worktree) TARGET_MODE="worktree" ;;
+      --pr)
+        shift
+        [ "$#" -gt 0 ] || { fail "inhousecode: --pr needs a pull-request number or URL."; exit $EXIT_USAGE; }
+        TARGET_MODE="diff"; PR_REFERENCE="$1"
+        ;;
+      --diff|--base)
+        shift
+        [ "$#" -gt 0 ] || { fail "inhousecode: --diff needs a base ref, e.g. --diff main."; exit $EXIT_USAGE; }
+        TARGET_MODE="diff"; DIFF_BASE="$1"
+        ;;
+      --path)
+        shift
+        [ "$#" -gt 0 ] || { fail "inhousecode: --path needs a value."; exit $EXIT_USAGE; }
+        TARGET_MODE="path"; TARGET_PATH="$1"
+        ;;
+      --mode)
+        shift
+        case "${1:-}" in
+          both|static|ai) GATE_MODE="$1" ;;
+          *) fail "inhousecode: --mode must be both, static, or ai."; exit $EXIT_USAGE ;;
+        esac
+        ;;
+      --no-fix)  NO_FIX=1 ;;
+      --fix)     FIX_REQUESTED=1 ;;
+      --gate)    GATE_ONLY=1 ;;
+      --verbose) INHOUSECODE_VERBOSE=1 ;;
+      -h|--help) usage; exit $EXIT_PASS ;;
+      *) fail "inhousecode: unknown option '$1'."; exit $EXIT_USAGE ;;
+    esac
+    shift
+  done
+  export INHOUSECODE_VERBOSE="${INHOUSECODE_VERBOSE:-0}"
+}
+
+# Resolve --diff's base ref into the merge base with the reviewed commit. A bare
+# branch name is also tried against 'origin/', because the base branch of a pull
+# request is usually only present as a remote-tracking ref in a reviewer's
+# checkout.
+resolve_diff_base() {
+  local resolved head
+  head="$(git rev-parse --verify --quiet "${DIFF_HEAD}^{commit}")" || {
+    fail "inhousecode: '$DIFF_HEAD' is not a commit to review."
+    exit $EXIT_USAGE
+  }
+  DIFF_HEAD="$head"
+  if [ -n "$DIFF_BASE_REV" ]; then
+    resolved="$DIFF_BASE_REV"
+  else
+    resolved="$(git rev-parse --verify --quiet "${DIFF_BASE}^{commit}")" ||
+      resolved="$(git rev-parse --verify --quiet "origin/${DIFF_BASE}^{commit}")" || {
+        fail "inhousecode: '--diff $DIFF_BASE' is not a commit. Fetch it first: git fetch origin $DIFF_BASE"
+        exit $EXIT_USAGE
+      }
+  fi
+  DIFF_MERGE_BASE="$(git merge-base "$resolved" "$head" 2>/dev/null)" || {
+    fail "inhousecode: '$DIFF_BASE' and the reviewed commit share no common ancestor."
+    exit $EXIT_USAGE
+  }
+  if [ "$DIFF_MERGE_BASE" = "$head" ]; then
+    good "inhousecode: nothing to review - no commits on top of $DIFF_BASE."
+    exit $EXIT_PASS
+  fi
+  export DIFF_MERGE_BASE DIFF_HEAD
+}
+
+# --pr: ask the forge what the pull request actually is, so the reviewer only
+# ever has to name it.
+resolve_pr_target() {
+  # shellcheck source=../lib/pr.sh
+  source "$INHOUSECODE_HOME/lib/pr.sh"
+  resolve_pull_request "$PR_REFERENCE" || exit $EXIT_USAGE
+  DIFF_BASE="$PR_BASE_BRANCH"
+  DIFF_BASE_REV="$PR_BASE_REV"
+  DIFF_HEAD="$PR_HEAD_REV"
+  say "${C_BOLD}PR #$PR_ID${C_RESET}${PR_TITLE:+ - $PR_TITLE}"
+  say "  ${DIFF_HEAD:0:9} -> $PR_BASE_BRANCH${PR_URL:+   $PR_URL}"
+}
+
+prepare_cache() {
+  INHOUSECODE_CACHE_ROOT="$REPO_ROOT/.inhousecode/cache/run-$$"
+  export INHOUSECODE_CACHE_ROOT
+  mkdir -p "$INHOUSECODE_CACHE_ROOT" || {
+    fail "inhousecode: could not create $INHOUSECODE_CACHE_ROOT"
+    exit $EXIT_USAGE
+  }
+  trap 'rm -rf -- "$INHOUSECODE_CACHE_ROOT"' EXIT
+  trap 'exit 130' INT TERM
+}
+
+# The authoritative in-scope file list. Every gate and every fixer prompt reads
+# this one file, so all phases judge exactly the same set of paths.
+collect_target_files() {
+  local list="$INHOUSECODE_CACHE_ROOT/scan-files.txt"
+  case "$TARGET_MODE" in
+    staged)
+      git diff --cached --name-only --diff-filter=ACMRD > "$list"
+      cp -f "$list" "$INHOUSECODE_CACHE_ROOT/staged-paths.txt"
+      ;;
+    worktree)
+      {
+        git diff --name-only --diff-filter=ACMRD
+        git diff --cached --name-only --diff-filter=ACMRD
+        git ls-files --others --exclude-standard
+      } | sort -u > "$list"
+      ;;
+    diff)
+      git diff --name-only --diff-filter=ACMRD "$DIFF_MERGE_BASE" "$DIFF_HEAD" | sort -u > "$list"
+      ;;
+    path)
+      {
+        git ls-files -- "$TARGET_PATH"
+        git ls-files --others --exclude-standard -- "$TARGET_PATH"
+      } | sort -u > "$list"
+      ;;
+  esac || return 1
+  TARGET_FILE_COUNT="$(grep -c . "$list" 2>/dev/null || true)"
+  TARGET_FILE_COUNT="${TARGET_FILE_COUNT:-0}"
+}
+
+print_summary() {
+  step "Summary"
+  [ "$STATIC_STATUS" != "not-run" ] &&
+    say "  Static analysis : $STATIC_STATUS${STATIC_ERROR:+ - $STATIC_ERROR}"
+  [ "$AI_STATUS" != "not-run" ] &&
+    say "  AI code review  : $AI_STATUS${AI_ERROR:+ - $AI_ERROR}"
+  print_summary_cost
+}
+
+# The cost line only exists when an agent could have been run at all. Guarding
+# on the function rather than on a flag keeps print_summary usable from any
+# path, including ones that never source the Copilot layer.
+print_summary_cost() {
+  command -v print_usage_summary >/dev/null 2>&1 && print_usage_summary
+  return 0
+}
+
+gates_blocked() {
+  case "$STATIC_STATUS" in fail|unavailable) return 0 ;; esac
+  case "$AI_STATUS" in fail|unavailable) return 0 ;; esac
+  return 1
+}
+
+# The developer always has the last word, but overriding is a deliberate,
+# logged act rather than a silent default.
+resolve_blocked() {
+  local answer prompt choices
+  if [ "$GATE_ONLY" = "1" ] || ! has_tty; then
+    fail "inhousecode: BLOCKED. Fix the findings above, or bypass every hook once with 'git commit --no-verify'."
+    return $EXIT_BLOCKED
+  fi
+  if [ "${INHOUSECODE_EXPLAIN_ENABLED:-0}" = "1" ]; then
+    prompt=$'\n  [d] show raw gate output   [e] explain these findings in Copilot\n  [o] override and continue  [a] abort\n  > '
+    choices='d, e, o, or a'
+  else
+    prompt=$'\n  [d] show raw gate output   [o] override and continue   [a] abort\n  > '
+    choices='d, o, or a'
+  fi
+  while :; do
+    ask answer "$prompt"
+    case "$answer" in
+      d|D)
+        [ -n "$STATIC_OUTPUT" ] && printf '\n--- static ---\n%s\n' "$STATIC_OUTPUT" > /dev/tty
+        [ -n "$AI_OUTPUT" ] && printf '\n--- review ---\n%s\n' "$AI_OUTPUT" > /dev/tty
+        ;;
+      e|E)
+        [ "${INHOUSECODE_EXPLAIN_ENABLED:-0}" = "1" ] || { printf '  Choose %s.\n' "$choices" > /dev/tty; continue; }
+        explain_handoff
+        # However the session ended, this run does not turn into a pass. Files
+        # may have moved underneath the commit and nothing has re-reviewed them.
+        say ""
+        info "inhousecode: run the gate (or your commit) again to check the tree as it now stands."
+        return $EXIT_BLOCKED
+        ;;
+      o|O)
+        ask answer '  Reason for the override (required): '
+        [ -n "$answer" ] || { printf '  A reason is required.\n' > /dev/tty; continue; }
+        warn "inhousecode: gates overridden - reason: $answer"
+        return $EXIT_PASS
+        ;;
+      a|A|"") return $EXIT_BLOCKED ;;
+      *) printf '  Choose %s.\n' "$choices" > /dev/tty ;;
+    esac
+  done
+}
+
+cmd_review() {
+  parse_review_args "$@"
+  require_repo
+  load_config || exit $EXIT_USAGE
+  [ -n "$PR_REFERENCE" ] && resolve_pr_target
+  [ "$TARGET_MODE" = "diff" ] && resolve_diff_base
+  prepare_cache
+
+  # Reviewing a pull request means judging someone else's committed work: the
+  # default is to report, not to rewrite their branch under them.
+  if [ "$TARGET_MODE" = "diff" ] && [ "$FIX_REQUESTED" != "1" ]; then
+    NO_FIX=1
+    info "inhousecode: this is a report-only review; pass --fix to allow repairs."
+  fi
+  # A fixer edits the working tree. If the commit under review is not the one
+  # checked out, those edits would land on unrelated code.
+  if [ "$TARGET_MODE" = "diff" ] && [ "$NO_FIX" != "1" ] &&
+      [ "$DIFF_HEAD" != "$(git rev-parse --verify --quiet HEAD)" ]; then
+    NO_FIX=1
+    warn "inhousecode: the reviewed commit is not checked out; repairs are disabled."
+    warn "  Check the branch out first if you want it fixed: git switch <branch>"
+  fi
+
+  if [ "$NO_FIX" = "1" ]; then
+    INHOUSECODE_STATIC_AUTOFIX=0
+    INHOUSECODE_AI_AUTOFIX_BLOCKING=0
+    INHOUSECODE_AI_TRIAGE_FINDINGS=0
+  elif [ "$TARGET_MODE" = "diff" ]; then
+    # Repairs are written to the working tree, so from here on that is the
+    # subject of every re-scan and re-review; otherwise a repair round would
+    # be invisible to the next one and the loop would stall on "no progress".
+    DIFF_SOURCE="worktree"
+  fi
+  [ "$GATE_MODE" = "ai" ] && INHOUSECODE_STATIC_ENABLED=0
+  [ "$GATE_MODE" = "static" ] && INHOUSECODE_AI_ENABLED=0
+
+  collect_target_files || { fail "inhousecode: could not enumerate the review target."; exit $EXIT_USAGE; }
+  if [ "$TARGET_FILE_COUNT" -eq 0 ]; then
+    good "inhousecode: nothing to review ($TARGET_MODE)."
+    exit $EXIT_PASS
+  fi
+
+  local target_label="$TARGET_MODE"
+  if [ "$TARGET_MODE" = "diff" ]; then
+    target_label="diff vs $DIFF_BASE @ ${DIFF_MERGE_BASE:0:9}"
+    [ -n "$PR_ID" ] && target_label="PR #$PR_ID vs $DIFF_BASE"
+    # The gates read the reviewed commit; a repair round edits the working tree.
+    if [ "$NO_FIX" != "1" ] && [ -n "$(git status --porcelain 2>/dev/null)" ]; then
+      warn "inhousecode: the working tree is dirty; repairs would mix with those changes."
+    fi
+  fi
+  say "${C_BOLD}inhousecode${C_RESET} $VERSION - reviewing $TARGET_FILE_COUNT file(s) [$target_label]"
+
+  # shellcheck source=../lib/copilot.sh
+  source "$INHOUSECODE_HOME/lib/copilot.sh"
+  usage_reset
+  # shellcheck source=../lib/impact.sh
+  source "$INHOUSECODE_HOME/lib/impact.sh"
+  # shellcheck source=../lib/gate_static.sh
+  source "$INHOUSECODE_HOME/lib/gate_static.sh"
+  # shellcheck source=../lib/gate_ai.sh
+  source "$INHOUSECODE_HOME/lib/gate_ai.sh"
+  # shellcheck source=../lib/explain.sh
+  source "$INHOUSECODE_HOME/lib/explain.sh"
+
+  if [ "$INHOUSECODE_STATIC_ENABLED" = "1" ] && [ "$INHOUSECODE_STATIC_AUTOFIX" = "1" ]; then
+    ensure_copilot || INHOUSECODE_STATIC_AUTOFIX=0
+  fi
+
+  run_static_gate
+  run_ai_gate
+
+  print_summary
+  explain_persist_briefing
+  if gates_blocked; then
+    resolve_blocked
+    exit $?
+  fi
+  # A passing run that ends with a modified tree has not actually been reviewed:
+  # the session's edits landed after the verdict. Re-run rather than wave it on.
+  if [ "${EXPLAIN_TREE_CHANGED:-0}" = "1" ]; then
+    warn "inhousecode: the session changed files after the gates ran."
+    info "inhousecode: run the gate (or your commit) again to check the tree as it now stands."
+    exit $EXIT_BLOCKED
+  fi
+  good "inhousecode: PASS"
+  exit $EXIT_PASS
+}
+
+# --- explain -----------------------------------------------------------------
+
+# Standalone entry point for the developer who aborted and thought better of it.
+# It replays the last briefing rather than re-running the gates, so it costs
+# nothing and always reflects the run the developer actually saw.
+cmd_explain() {
+  require_repo
+  load_config || exit $EXIT_USAGE
+  # shellcheck source=../lib/copilot.sh
+  source "$INHOUSECODE_HOME/lib/copilot.sh"
+  # shellcheck source=../lib/explain.sh
+  source "$INHOUSECODE_HOME/lib/explain.sh"
+
+  local briefing
+  briefing="$(explain_briefing_path)"
+  if [ ! -s "$briefing" ]; then
+    fail "inhousecode: no findings briefing yet. Run 'inhousecode review' first."
+    exit $EXIT_USAGE
+  fi
+  if [ "${INHOUSECODE_EXPLAIN_ENABLED:-0}" != "1" ]; then
+    fail "inhousecode: explain is disabled (explain.enabled is false)."
+    exit $EXIT_USAGE
+  fi
+  explain_launch_session "$briefing"
+  exit $EXIT_PASS
+}
+
+# --- init --------------------------------------------------------------------
+
+cmd_init() {
+  require_repo
+  local dir="$REPO_ROOT/.inhousecode"
+  mkdir -p "$dir" || exit $EXIT_USAGE
+
+  if [ -f "$dir/config.json" ]; then
+    info "inhousecode: $dir/config.json already exists; leaving it alone."
+  else
+    cp "$INHOUSECODE_HOME/config/review.config.default.json" "$dir/config.json"
+    good "inhousecode: wrote $dir/config.json"
+  fi
+  if [ -f "$dir/developer-rulebook.md" ]; then
+    info "inhousecode: $dir/developer-rulebook.md already exists; leaving it alone."
+  else
+    cp "$INHOUSECODE_HOME/skills/code-review/references/developer-rulebook.md" \
+      "$dir/developer-rulebook.md"
+    good "inhousecode: wrote $dir/developer-rulebook.md - this is yours to edit."
+  fi
+  if ! grep -qs '^\.inhousecode/cache/' "$REPO_ROOT/.gitignore"; then
+    printf '\n# inhousecode scratch space\n.inhousecode/cache/\n' >> "$REPO_ROOT/.gitignore"
+    good "inhousecode: ignored .inhousecode/cache/"
+  fi
+  say ""
+  say "Next: edit .inhousecode/developer-rulebook.md, then run 'inhousecode install-hooks'."
+}
+
+# --- hooks -------------------------------------------------------------------
+
+install_pre_commit() {
+  local hooks_dir="$REPO_ROOT/.githooks" hook
+  mkdir -p "$hooks_dir" || return 1
+  hook="$hooks_dir/pre-commit"
+  # A shim, not a copy: the installed project stays the single source of truth,
+  # so upgrading inhousecode never requires reinstalling hooks.
+  cat > "$hook" <<EOF
+#!/usr/bin/env bash
+# Installed by inhousecode. Edit the tool, not this shim.
+exec "$INHOUSECODE_HOME/bin/inhousecode" review --staged "\$@"
+EOF
+  chmod +x "$hook" || return 1
+  git config core.hooksPath ".githooks"
+  good "inhousecode: installed $hook"
+}
+
+install_agent_stop() {
+  local dir="$REPO_ROOT/.github/hooks" target
+  mkdir -p "$dir" || return 1
+  target="$dir/inhousecode.json"
+  sed -e "s|@INHOUSECODE_HOME@|$INHOUSECODE_HOME|g" \
+    "$INHOUSECODE_HOME/hooks/copilot-hooks.template.json" > "$target" || return 1
+  good "inhousecode: installed $target (Copilot CLI agentStop hook)"
+  info "  Restart your Copilot CLI session to load it; check with /env."
+}
+
+cmd_install_hooks() {
+  require_repo
+  load_config || exit $EXIT_USAGE
+  local want_pre_commit=0 want_agent_stop=0
+  if [ "$#" -eq 0 ]; then
+    want_pre_commit="$INHOUSECODE_TRIGGERS_PRE_COMMIT"
+    want_agent_stop="$INHOUSECODE_TRIGGERS_AGENT_STOP"
+  fi
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --pre-commit) want_pre_commit=1 ;;
+      --agent-stop) want_agent_stop=1 ;;
+      *) fail "inhousecode: unknown option '$1'."; exit $EXIT_USAGE ;;
+    esac
+    shift
+  done
+  [ "$want_pre_commit" = "1" ] && { install_pre_commit || exit $EXIT_USAGE; }
+  [ "$want_agent_stop" = "1" ] && { install_agent_stop || exit $EXIT_USAGE; }
+  if [ "$want_pre_commit" != "1" ] && [ "$want_agent_stop" != "1" ]; then
+    warn "inhousecode: no trigger selected; nothing installed."
+  fi
+}
+
+cmd_uninstall_hooks() {
+  require_repo
+  local hook="$REPO_ROOT/.githooks/pre-commit"
+  local agent_hook="$REPO_ROOT/.github/hooks/inhousecode.json"
+  if [ -f "$hook" ] && grep -q 'Installed by inhousecode' "$hook"; then
+    rm -f -- "$hook" && good "inhousecode: removed $hook"
+    [ -z "$(ls -A "$REPO_ROOT/.githooks" 2>/dev/null)" ] &&
+      git config --unset core.hooksPath 2>/dev/null
+  fi
+  [ -f "$agent_hook" ] && rm -f -- "$agent_hook" &&
+    good "inhousecode: removed $agent_hook"
+  return 0
+}
+
+# --- doctor ------------------------------------------------------------------
+
+check() {
+  local label="$1" detail="$2" ok="$3"
+  if [ "$ok" = "0" ]; then
+    good "  OK    $label${detail:+ - $detail}"
+  else
+    warn "  MISS  $label${detail:+ - $detail}"
+  fi
+}
+
+cmd_doctor() {
+  say "${C_BOLD}inhousecode $VERSION${C_RESET}  ($INHOUSECODE_HOME)"
+  step "Environment"
+
+  local repo_root repo_rc
+  repo_root="$(git rev-parse --show-toplevel 2>/dev/null)"
+  repo_rc=$?
+  check "git repository" "$repo_root" "$repo_rc"
+
+  if resolve_python; then
+    check "python 3" "$(${PYTHON_CMD[*]} --version 2>&1)" 0
+  else
+    check "python 3" "required for the static gate" 1
+  fi
+
+  if command -v semgrep >/dev/null 2>&1; then
+    check "semgrep" "$(semgrep --version 2>/dev/null)" 0
+  else
+    check "semgrep" "install with: pip install semgrep" 1
+  fi
+
+  local copilot
+  if copilot="$(resolve_copilot)"; then
+    check "Copilot CLI" "$copilot" 0
+  else
+    check "Copilot CLI" "required for the AI gate and all repairs" 1
+  fi
+
+  if resolve_timeout; then
+    check "timeout" "$TIMEOUT_BIN" 0
+  else
+    check "timeout" "GNU coreutils timeout bounds agent runs" 1
+  fi
+
+  # Optional: only --pr needs these, and only for the matching forge.
+  if command -v gh >/dev/null 2>&1; then
+    check "gh (GitHub PRs)" "$(gh --version 2>/dev/null | head -1)" 0
+  else
+    check "gh (GitHub PRs)" "optional; needed by --pr on GitHub" 1
+  fi
+  if command -v az >/dev/null 2>&1; then
+    check "az (Azure DevOps PRs)" "optional; needs the azure-devops extension" 0
+  else
+    check "az (Azure DevOps PRs)" "optional; needed by --pr on Azure DevOps" 1
+  fi
+
+  if REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"; then
+    export REPO_ROOT
+    step "Repository configuration"
+    if load_config; then
+      good "  Config resolved."
+      say "    static : enabled=$INHOUSECODE_STATIC_ENABLED autofix=$INHOUSECODE_STATIC_AUTOFIX maxLoops=$INHOUSECODE_STATIC_MAX_FIX_LOOPS"
+      say "    ai     : enabled=$INHOUSECODE_AI_ENABLED autofixBlocking=$INHOUSECODE_AI_AUTOFIX_BLOCKING triageFindings=$INHOUSECODE_AI_TRIAGE_FINDINGS"
+      say "    rulebook: $INHOUSECODE_RULEBOOK $([ -f "$REPO_ROOT/$INHOUSECODE_RULEBOOK" ] && echo '(present)' || echo '(using shipped default)')"
+    fi
+    step "Installed triggers"
+    [ -f "$REPO_ROOT/.githooks/pre-commit" ] &&
+      good "  pre-commit installed" || info "  pre-commit not installed"
+    [ -f "$REPO_ROOT/.github/hooks/inhousecode.json" ] &&
+      good "  agent-stop installed" || info "  agent-stop not installed"
+  fi
+}
+
+# --- dispatch ----------------------------------------------------------------
+
+main() {
+  local command="${1:-help}"
+  [ "$#" -gt 0 ] && shift
+  case "$command" in
+    review)          cmd_review "$@" ;;
+    explain)         cmd_explain "$@" ;;
+    init)            cmd_init "$@" ;;
+    install-hooks)   cmd_install_hooks "$@" ;;
+    uninstall-hooks) cmd_uninstall_hooks "$@" ;;
+    doctor)          cmd_doctor "$@" ;;
+    version|--version|-v) say "inhousecode $VERSION" ;;
+    help|--help|-h)  usage ;;
+    *) fail "inhousecode: unknown command '$command'."; usage; exit $EXIT_USAGE ;;
+  esac
+}
+
+main "$@"

@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "_managedBy": "inhousecode",
+  "_description": "Runs inhousecode static analysis after every agent turn. Findings are handed back to the same agent to fix.",
+  "hooks": {
+    "agentStop": [
+      {
+        "type": "command",
+        "bash": "bash \"@INHOUSECODE_HOME@/hooks/agent-stop.sh\"",
+        "powershell": "bash \"@INHOUSECODE_HOME@/hooks/agent-stop.sh\"",
+        "timeoutSec": 300
+      }
+    ]
+  }
+}

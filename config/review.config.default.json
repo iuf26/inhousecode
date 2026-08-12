@@ -1,0 +1,44 @@
+{
+  "$schema": "./review.config.schema.json",
+  "triggers": {
+    "preCommit": true,
+    "agentStop": false
+  },
+  "static": {
+    "enabled": true,
+    "autofix": true,
+    "maxFixLoops": 20,
+    "fixSeverity": "all",
+    "restageFixes": true,
+    "semgrepConfigs": [
+      "p/security-audit",
+      "p/owasp-top-ten",
+      "p/cwe-top-25",
+      "p/python"
+    ]
+  },
+  "ai": {
+    "enabled": true,
+    "model": "",
+    "timeoutSec": 600,
+    "autofixBlocking": true,
+    "maxFixLoops": 3,
+    "triageFindings": true,
+    "verifyIntent": true,
+    "impactAnalysis": true,
+    "critiqueModel": "gpt-5.6-sol",
+    "critiqueRounds": 2
+  },
+  "agentStop": {
+    "static": true,
+    "ai": false,
+    "maxTurns": 20
+  },
+  "explain": {
+    "enabled": true,
+    "autoLaunch": true,
+    "contextLines": 5,
+    "model": ""
+  },
+  "rulebook": ".inhousecode/developer-rulebook.md"
+}

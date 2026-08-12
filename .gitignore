@@ -1,0 +1,10 @@
+# inhousecode scratch space
+.inhousecode/cache/
+
+# Locally installed git hooks
+.githooks/
+
+__pycache__/
+*.pyc
+.venv/
+.DS_Store
