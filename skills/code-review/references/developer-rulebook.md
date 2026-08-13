@@ -29,11 +29,15 @@ without anyone having to remember it.
 For every guideline below, the reviewer checks whether the reviewed code honors
 it.
 
-- A violation is a **HIGH** (blocking) finding, unless the rule is marked
-  **(advisory)** — those are reported but do not block.
+- A violation is **HIGH** (blocking) by default. End the rule with `(MEDIUM)`
+  or `(LOW)` to report it without blocking — the reviewer uses exactly the
+  severity you wrote.
 - Style, formatting, and house-convention rules are **never** HIGH. They cap at
-  **MEDIUM**, even without the advisory marker. Nothing about formatting should
-  ever block a commit.
+  **MEDIUM**, even with no marker. Nothing about formatting should ever block
+  a commit.
+- `(CRITICAL)` is not a valid marker here. That severity is reserved for
+  exploitable vulnerabilities the reviewer finds on its own — never assign it
+  from the rulebook.
 - Each finding is cited by the rule's `id`.
 
 ## How to write a rule
@@ -46,16 +50,19 @@ style that genuinely matters.
 One line per rule:
 
 ```
-- [ ] id (scope) — the rule
+- id (scope) — the rule
 ```
 
 - **`id`** — short, kebab-case, unique. The reviewer cites it verbatim, so make
   it self-explanatory (`prefer-pathlib`, not `rule12`).
 - **`scope`** — where it applies: `all`, or an area like `python`, `bash`,
   `scripts`, `tests`, `sql`, `frontend`. The reviewer applies it only to
-  matching files.
+  matching files. Nothing else lives in this field.
 - **`the rule`** — one imperative, checkable sentence. State what MUST hold.
-  Add `(advisory)` after the scope to make it non-blocking.
+  Rules are **HIGH** (blocking) by default. End the line with `(MEDIUM)` or
+  `(LOW)` to make it non-blocking instead — it's a separate marker from
+  scope, not a second value crammed into the same parens. `(CRITICAL)` isn't
+  a valid choice here; see above.
 
 Keep rules **specific and testable**. "Write clean code" is not a rule;
 "functions do one thing; split long or multi-purpose functions" is.
@@ -63,22 +70,20 @@ Keep rules **specific and testable**. "Write clean code" is not a rule;
 Examples:
 
 ```
-- [ ] prefer-pathlib (python) — use pathlib.Path for filesystem paths, not os.path
-- [ ] no-print-logging (python) — use the logging module, not print(), in library code
-- [ ] pin-versions (scripts) — pin dependency versions; do not install from latest
-- [ ] tenant-scoped-queries (sql) — every query filters by tenant_id
-- [ ] docstring-public-fns (python, advisory) — public functions have a short docstring
+- prefer-pathlib (python) — use pathlib.Path for filesystem paths, not os.path
+- no-print-logging (python) — use the logging module, not print(), in library code
+- pin-versions (scripts) — pin dependency versions; do not install from latest
+- tenant-scoped-queries (sql) — every query filters by tenant_id
+- docstring-public-fns (python) — public functions have a short docstring (LOW)
 ```
 
 Delete a rule by deleting its line.
 
 ## Active guidelines
-
-- [ ] constants-at-top (scripts, advisory) — magic values are named constants grouped near the top
-- [ ] no-duplication (all, advisory) — reuse existing helpers instead of copy-pasting logic
-- [ ] no-perf-regression (all) — do not degrade application-level performance; avoid adding blocking I/O, N+1 calls, repeated scans, or unbounded allocation on existing hot paths
-- [ ] single-constant-definition (all) — define each constant exactly once; never redeclare the same constant value or name in a second place
-- [ ] no-security-regression (all) — introduce no new security weakness: no injection, path traversal, unsafe deserialization, weakened authn/authz, or leaked credentials in logs
-- [ ] manifest-processing-performance (all) — code that processes high-volume manifest services must stream or batch, reuse parsed state, and stay linear in manifest count; no per-manifest re-parsing, re-reading, or per-item network calls
+<!-- Examples active guidelines -->
+- constants-at-top (scripts) — magic values are named constants grouped near the top (MEDIUM)
+- no-duplication (all) — reuse existing helpers instead of copy-pasting logic (MEDIUM)
+- single-constant-definition (all) — define each constant exactly once; never redeclare the same constant value or name in a second place
+- no-security-regression (all) — introduce no new security weakness: no injection, path traversal, unsafe deserialization, weakened authn/authz, or leaked credentials in logs
 
 <!-- Add your team's rules below this line. -->

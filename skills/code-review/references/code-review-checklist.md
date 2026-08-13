@@ -3,11 +3,22 @@
 The reviewer's **method and severity rubric**. Apply it *after* understanding
 what the change is trying to do.
 
+## Contents
+
+- [Correctness](#correctness)
+- [Design & maintainability](#design--maintainability)
+- [AI-generated code smells](#ai-generated-code-smells)
+- [Performance & scalability](#performance--scalability)
+- [Interfaces & contracts](#interfaces--contracts)
+- [Security](#security)
+- [Tests](#tests)
+- [Severity guidance](#severity-guidance)
+
 **The team rulebook comes first.** Concrete, citable rules live in
-[developer-rulebook.md](developer-rulebook.md); check those first. This
-checklist adds the judgment dimensions that are not fixed rules — correctness
-edge cases, design cohesion, contract stability, test adequacy — plus the single
-severity scale every finding uses.
+`developer-rulebook.md` (handed to you directly alongside this file); check
+those first. This checklist adds the judgment dimensions that are not fixed
+rules — correctness edge cases, design cohesion, contract stability, test
+adequacy — plus the single severity scale every finding uses.
 
 **Precedence:** when a checklist prompt overlaps a rulebook rule, the **rulebook
 wins**. Cite its `id`, use its severity, and do not report the issue twice. Use
@@ -103,11 +114,12 @@ The single scale for all findings, checklist and rulebook alike:
 - **LOW** — a minor nit or style suggestion.
 
 A violated rulebook rule takes its severity from the rulebook (**HIGH** by
-default, unless marked advisory). CRITICAL and HIGH block; MEDIUM and LOW do not.
+default, or the `(MEDIUM)`/`(LOW)` the rule itself declares — never CRITICAL).
+CRITICAL and HIGH block; MEDIUM and LOW do not.
 
 **When in doubt, go lower.** A gate that blocks on opinions gets disabled, and a
 disabled gate reviews nothing.
 
 Findings from this checklist are drafts. Every one of them still has to survive
-the critique pass in [finding-critique.md](finding-critique.md) before it is
-reported.
+the critique pass in `finding-critique.md` (Step 5 of the workflow) before it
+is reported.

@@ -1,29 +1,54 @@
 # Architecture
 
+The mechanism behind the five positions in
+[design-principles.md](design-principles.md) — read that first for *why* the
+pipeline is shaped this way; this page is the *how*.
+
+*Numeric budgets and defaults below (`maxFixLoops`, `critiqueRounds`, etc.)
+verified against `config/review.config.default.json` as of 13 August 2026 —
+the config file is the source of truth if they drift apart.*
+
+- [The pipeline](#the-pipeline)
+- [The finding contract](#the-finding-contract)
+- [The critique pass](#the-critique-pass) · [second opinion](#the-second-opinion)
+- [Trust boundaries](#trust-boundaries)
+- [The explain handoff](#the-explain-handoff)
+- [Target modes](#target-modes)
+- [Judging a change against what it promised](#judging-a-change-against-what-it-promised)
+- [The repair loops](#the-repair-loops)
+- [The standard of craft](#the-standard-of-craft)
+- [What the run cost](#what-the-run-cost)
+- [Layout](#layout)
+- [Failure behavior](#failure-behavior)
+
 ## The pipeline
 
-```
-target resolution
-   staged | worktree | diff | pr | path
-        │
-        ▼  in-scope file list  (one authoritative list, shared by every phase)
-        │
-┌───────┴─────────────────────────────────────────────┐
-│ Phase 1 — static                                    │
-│   static_scan.sh   materialize → semgrep → envelope │
-│   static_report.py envelope    → findings + verdict │
-│   repair loop      findings → fixer agent → re-scan │
-└───────┬─────────────────────────────────────────────┘
-        │
-┌───────┴─────────────────────────────────────────────┐
-│ Phase 2 — AI review                                 │
-│   review agent (read-only)  → draft findings        │
-│   rubber-duck critique      → findings + verdict    │
-│   blocking → fixer agent → re-review (bounded)      │
-│   all findings → numbered list → developer selects  │
-└───────┬─────────────────────────────────────────────┘
-        │
-     verdict → exit code
+```mermaid
+flowchart TD
+    T["target resolution<br/>staged · worktree · diff · pr · path"]
+    F["in-scope file list<br/>one authoritative list, shared by every phase"]
+    T --> F --> P1
+
+    subgraph P1["Phase 1 — static"]
+        direction TB
+        S1["static_scan.sh<br/>materialize → semgrep → envelope"]
+        S2["static_report.py<br/>envelope → findings + verdict"]
+        S3["repair loop<br/>findings → fixer agent → re-scan"]
+        S1 --> S2 --> S3
+    end
+
+    P1 --> P2
+
+    subgraph P2["Phase 2 — AI review"]
+        direction TB
+        R1["review agent (read-only)<br/>→ draft findings"]
+        R2["rubber-duck critique<br/>→ findings + verdict"]
+        R3["blocking → fixer agent<br/>→ re-review (bounded)"]
+        R4["all findings → numbered list<br/>→ developer selects"]
+        R1 --> R2 --> R3 --> R4
+    end
+
+    P2 --> V["verdict → exit code"]
 ```
 
 ## The finding contract
@@ -242,8 +267,9 @@ Two inputs are precomputed for the reviewer, both optional and both degrading to
 claim, finds the code that delivers it, and reports one `##CR-CLAIM##` line per
 claim with status MET, PARTIAL, UNMET, or UNVERIFIABLE. Claim lines carry no
 severity and are rendered in their own table, above the findings table and never
-numbered alongside it — invariant 7 requires the numbers on screen to be the
-numbers the developer may type, and only one table owns those. An UNMET or
+numbered alongside it — [invariant 7](../AGENTS.md#invariants) requires the
+numbers on screen to be the numbers the developer may type, and only one
+table owns those. An UNMET or
 PARTIAL claim additionally produces an ordinary finding, which is what carries
 severity and enters the repair and triage loops.
 

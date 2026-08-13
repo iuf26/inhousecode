@@ -354,14 +354,19 @@ EOF
 ai_output_contract() {
   cat <<EOF
 SEVERITY RUBRIC
-  CRITICAL  exploitable vulnerability, data loss, or corruption.
-  HIGH      a bug that will surface in production, or a violation of an
-            active team rulebook guideline that is not marked (advisory).
+  CRITICAL  exploitable vulnerability, data loss, or corruption. Never a
+            rulebook rule's severity - a rule tops out at HIGH.
+  HIGH      a bug that will surface in production, or a rulebook guideline
+            violated at its default severity (no marker, or explicit (HIGH)).
   MEDIUM    a real weakness: missing validation, a poor contract, an
-            unmeaningful test, a performance trap, an (advisory) rule violation.
-  LOW       polish. Naming, clarity, small idiom issues.
+            unmeaningful test, a performance trap, or a rulebook guideline
+            marked (MEDIUM).
+  LOW       polish. Naming, clarity, small idiom issues, or a rulebook
+            guideline marked (LOW).
 CRITICAL and HIGH are blocking. MEDIUM and LOW are not, and must never be
-promoted to blocking. Formatting and style never exceed MEDIUM.
+promoted to blocking. Formatting and style never exceed MEDIUM. A rulebook
+rule's own marker sets its severity - use exactly what the rule declares,
+never upgrade or downgrade it.
 
 OUTPUT CONTRACT - THIS IS NOT OPTIONAL
 Emit one line per finding, in this exact shape, with real TAB characters

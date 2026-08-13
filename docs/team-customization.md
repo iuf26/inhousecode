@@ -15,20 +15,20 @@ it.
 One line per rule:
 
 ```
-- [ ] id (scope) — the rule
+- id (scope) — the rule
 ```
 
 | Part | What it is |
 |---|---|
 | `id` | Short, kebab-case, unique. The reviewer cites it verbatim, so `prefer-pathlib` beats `rule12`. |
-| `scope` | `all`, or an area: `python`, `bash`, `sql`, `tests`, `frontend`. Applied only to matching files. |
-| the rule | One imperative, checkable sentence. Add `(advisory)` to make it non-blocking. |
+| `scope` | `all`, or an area: `python`, `bash`, `sql`, `tests`, `frontend`. Applied only to matching files — nothing else goes in this field. |
+| the rule | One imperative, checkable sentence. Blocking (**HIGH**) by default. End the line with `(MEDIUM)` or `(LOW)` to report without blocking — same severities findings already use. `(CRITICAL)` isn't allowed here; that's reserved for what the reviewer finds on its own. |
 
 ```
-- [ ] tenant-scoped-queries (sql) — every query filters by tenant_id
-- [ ] no-print-logging (python) — use the logging module, not print(), in library code
-- [ ] pin-versions (scripts) — pin dependency versions; do not install from latest
-- [ ] docstring-public-fns (python, advisory) — public functions have a short docstring
+- tenant-scoped-queries (sql) — every query filters by tenant_id
+- no-print-logging (python) — use the logging module, not print(), in library code
+- pin-versions (scripts) — pin dependency versions; do not install from latest
+- docstring-public-fns (python) — public functions have a short docstring (LOW)
 ```
 
 ### What belongs here
@@ -56,15 +56,16 @@ Good sources, in order of value:
 
 ### Severity, honestly
 
-A violated rule is **HIGH** and blocks, unless marked `(advisory)`. Style and
-convention rules cap at **MEDIUM** regardless.
+A violated rule is **HIGH** and blocks by default. Mark it `(MEDIUM)` or
+`(LOW)` to report without blocking. Style and convention rules cap at
+**MEDIUM** regardless of what you write.
 
-Be conservative. Every rule you mark blocking is a commit someone can't make. A
+Be conservative. Every rule you leave at HIGH is a commit someone can't make. A
 gate that blocks on taste gets uninstalled, and an uninstalled gate reviews
 nothing.
 
-Start advisory. Promote a rule to blocking once you've seen it fire correctly a
-few times.
+Start at `(MEDIUM)` or `(LOW)`. Promote a rule to HIGH once you've seen it
+fire correctly a few times.
 
 ## 2. Repository context — `AGENTS.md`
 

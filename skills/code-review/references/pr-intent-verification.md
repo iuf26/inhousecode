@@ -94,8 +94,8 @@ reviewer approves something they did not know they were approving. Flag it as
 comment that the description skipped is not worth a line.
 
 If the undocumented change is also incompatible with existing callers, it stops
-being a documentation problem — see
-[breaking-change-analysis.md](breaking-change-analysis.md).
+being a documentation problem — that's `breaking-change-analysis.md`'s
+territory (handed to you directly when the caller supplies a blast-radius map).
 
 ## Severity
 

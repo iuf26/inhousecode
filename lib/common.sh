@@ -145,8 +145,7 @@ unique_findings() {
   local content="$1" marker="$2"
   printf '%s\n' "$content" | awk -F'\t' -v marker="$marker" '
     function rank(severity) {
-      return severity=="CRITICAL" ? 1 : severity=="HIGH" ? 2 :
-             severity=="MEDIUM" ? 3 : 4
+      return severity=="CRITICAL" ? 1 : severity=="HIGH" ? 2 : severity=="MEDIUM" ? 3 : 4
     }
     function normalize(value) {
       gsub(/^[[:space:]]+|[[:space:]]+$/, "", value); return tolower(value)

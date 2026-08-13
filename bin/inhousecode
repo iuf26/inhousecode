@@ -9,10 +9,13 @@
 
 set -uo pipefail
 
-VERSION="1.0.0"
+VERSION="0.1.0"
 EXIT_PASS=0
 EXIT_BLOCKED=1
 EXIT_USAGE=2
+# Where the pre-commit shim is written, and the only value of core.hooksPath
+# this tool will ever write or clear. See install_pre_commit.
+HOOKS_DIR=".githooks"
 
 SCRIPT_PATH="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 INHOUSECODE_HOME="$(cd -- "$SCRIPT_PATH/.." && pwd)"
@@ -435,7 +438,7 @@ cmd_init() {
 # --- hooks -------------------------------------------------------------------
 
 install_pre_commit() {
-  local hooks_dir="$REPO_ROOT/.githooks" hook
+  local hooks_dir="$REPO_ROOT/$HOOKS_DIR" hook current
   mkdir -p "$hooks_dir" || return 1
   hook="$hooks_dir/pre-commit"
   # A shim, not a copy: the installed project stays the single source of truth,
@@ -446,8 +449,30 @@ install_pre_commit() {
 exec "$INHOUSECODE_HOME/bin/inhousecode" review --staged "\$@"
 EOF
   chmod +x "$hook" || return 1
-  git config core.hooksPath ".githooks"
-  good "inhousecode: installed $hook"
+
+  # core.hooksPath is a single value shared with every other hook manager in the
+  # repository -- husky, lefthook, pre-commit. Pointing it here silently
+  # disables every hook they installed, and the damage is invisible: commits
+  # keep succeeding, just without the checks the team thought they had. So it is
+  # never overwritten. A gate that disables other gates behind your back has no
+  # business calling itself a gate.
+  current="$(git config --get core.hooksPath 2>/dev/null)" || current=""
+  if [ -z "$current" ]; then
+    git config core.hooksPath "$HOOKS_DIR" || return 1
+    good "inhousecode: installed $hook"
+    return 0
+  fi
+  if [ "$current" = "$HOOKS_DIR" ]; then
+    good "inhousecode: installed $hook"
+    return 0
+  fi
+
+  warn "inhousecode: core.hooksPath already points at '$current' - leaving it alone."
+  warn "  The shim is written but will NOT run until it is wired in. Either:"
+  warn "    - call it from your existing hook:"
+  warn "        exec \"$INHOUSECODE_HOME/bin/inhousecode\" review --staged"
+  warn "    - or take over hooks entirely: git config core.hooksPath $HOOKS_DIR"
+  return 0
 }
 
 install_agent_stop() {
@@ -485,12 +510,20 @@ cmd_install_hooks() {
 
 cmd_uninstall_hooks() {
   require_repo
-  local hook="$REPO_ROOT/.githooks/pre-commit"
+  local hook="$REPO_ROOT/$HOOKS_DIR/pre-commit"
   local agent_hook="$REPO_ROOT/.github/hooks/inhousecode.json"
+  local current
   if [ -f "$hook" ] && grep -q 'Installed by inhousecode' "$hook"; then
     rm -f -- "$hook" && good "inhousecode: removed $hook"
-    [ -z "$(ls -A "$REPO_ROOT/.githooks" 2>/dev/null)" ] &&
+    # Clear the pointer only when it is still ours and the directory is empty.
+    # Another manager's value was never overwritten on the way in, so unsetting
+    # it here would break hooks this tool never owned -- and uninstalling a
+    # thing must not leave the repository worse than never installing it.
+    current="$(git config --get core.hooksPath 2>/dev/null)" || current=""
+    if [ "$current" = "$HOOKS_DIR" ] &&
+        [ -z "$(ls -A "$REPO_ROOT/$HOOKS_DIR" 2>/dev/null)" ]; then
       git config --unset core.hooksPath 2>/dev/null
+    fi
   fi
   [ -f "$agent_hook" ] && rm -f -- "$agent_hook" &&
     good "inhousecode: removed $agent_hook"

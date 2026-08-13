@@ -7,7 +7,8 @@ description: >-
   prove get reported. Emits normalized findings and a PASS/FAIL verdict where
   only CRITICAL and HIGH block.
   USE FOR: review my changes, review staged changes, pre-commit review, review
-  this diff, check my code against our team rules, review a folder or file.
+  this diff, review a pull request or PR, review a branch against main, check
+  my code against our team rules, review a folder or file.
   DO NOT USE FOR: running mechanical scanners (a static gate already did that),
   filing tickets, or answering product questions.
 compatibility: >-

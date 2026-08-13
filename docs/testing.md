@@ -6,15 +6,33 @@ that is a real regression, not a doc that drifted.
 
 Total time: ~10 minutes, most of it waiting on two model calls.
 
-Paths use Git Bash form (`/c/Users/...`). On Windows run everything from Git
-Bash, not PowerShell — the CLI and hooks are bash.
+- [0. Static checks on the tool itself](#0-static-checks-on-the-tool-itself)
+- [1. Environment](#1-environment)
+- [2. Phase 1 alone — report only](#2-phase-1-alone--report-only)
+- [3. The repair loop](#3-the-repair-loop)
+- [4. Phase 2 alone — the reviewer](#4-phase-2-alone--the-reviewer)
+- [5. The finding picker](#5-the-finding-picker)
+- [5b. The explain handoff](#5b-the-explain-handoff)
+- [6. The pre-commit trigger, for real](#6-the-pre-commit-trigger-for-real)
+- [7. The agentStop trigger](#7-the-agentstop-trigger)
+- [8. Pull-request mode (`--pr` and `--diff`)](#8-pull-request-mode---pr-and---diff)
+- [9. Install and uninstall](#9-install-and-uninstall)
+- [10. Reset](#10-reset)
+- [Line endings](#line-endings)
+- [Coverage](#coverage)
 
-Set these once per shell:
+On Windows run everything from Git Bash, not PowerShell — the CLI and hooks are
+bash — and write paths in Git Bash form (`/c/Users/you/src/...`).
+
+Set these once per shell, pointing at wherever you keep the two checkouts:
 
 ```bash
-INHOUSECODE=/c/Users/iuliaistrate/source_personal/inhousecode
-DEMO=/c/Users/iuliaistrate/source_personal/inhousecode-demo
+INHOUSECODE=~/src/inhousecode        # this repository
+DEMO=~/src/inhousecode-demo          # a scratch repo seeded with real defects
 ```
+
+Every step below is written against those two variables, so nothing else in this
+page needs editing.
 
 ---
 
@@ -58,9 +76,9 @@ Two failures worth knowing:
 - **Copilot CLI resolves to a path containing `globalStorage/github.copilot-chat`.**
   That is VS Code's internal copy and it cannot run headless. `resolve_copilot`
   is supposed to skip it. If `doctor` reports that path, the skip is broken.
-- **`python3` not found but `python` works.** Expected on Windows, where
-  `python3` is a Microsoft Store stub. `resolve_python` probes with `-c` rather
-  than `command -v` for exactly this reason.
+- **`python3` not found but `python` works.** Expected on Windows, where the
+  Python launcher installs as `python`, not `python3`. `resolve_python` probes
+  with `-c` rather than `command -v` for exactly this reason.
 
 ---
 
@@ -214,8 +232,9 @@ selects every finding inside it. `a` selects the whole table. Reset with
 **After picking anything**, a second report headed
 `=== AI review (after your fixes) ===` must appear — every time, not only when a
 blocking finding was picked. Without it the verdict describes code that no longer
-exists: `PASS` on edits no gate ever saw, which is the hole invariant 8 closes
-for explain sessions. If findings remain, the picker must offer the **new** list
+exists: `PASS` on edits no gate ever saw, which is the hole
+[invariant 8](../AGENTS.md#invariants) closes for explain sessions. If
+findings remain, the picker must offer the **new** list
 rather than stopping at a report you cannot act on.
 
 Pick `a` repeatedly to confirm this terminates: either the review comes back
@@ -462,7 +481,7 @@ bash "$INHOUSECODE/bin/inhousecode" doctor | tail -4   # both "not installed"
 Also confirm `init` never destroys work:
 
 ```bash
-echo '- [ ] my-rule (all) — a rule I wrote' >> .inhousecode/developer-rulebook.md
+echo '- my-rule (all) — a rule I wrote' >> .inhousecode/developer-rulebook.md
 bash "$INHOUSECODE/bin/inhousecode" init
 grep -c my-rule .inhousecode/developer-rulebook.md   # expect: 1
 ```

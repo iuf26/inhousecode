@@ -1,5 +1,9 @@
 # Configuration
 
+*Defaults and budgets below verified against `config/review.config.default.json`
+as of 13 August 2026 — if a value here disagrees with that file, the file
+wins.*
+
 Configuration resolves in two layers, lowest precedence first:
 
 1. `config/review.config.default.json` in the inhousecode checkout
@@ -10,6 +14,41 @@ hard error**, not a warning — a typo must never silently disable a gate.
 
 Create the repository layer with `inhousecode init`, then delete everything you
 don't want to override.
+
+## All parameters at a glance
+
+Every key in `config/review.config.default.json`, in file order. See the
+section below each group for the full explanation and notes — this table is
+for finding the key you want fast.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `triggers.preCommit` | `true` | `install-hooks` installs the git pre-commit hook |
+| `triggers.agentStop` | `false` | `install-hooks` installs the Copilot `agentStop` hook |
+| `static.enabled` | `true` | Run Semgrep at all |
+| `static.autofix` | `false` | Hand findings to a fixer agent and re-scan |
+| `static.maxFixLoops` | `20` | Repair-round budget (max 20) |
+| `static.fixSeverity` | `"all"` | `all` repairs every finding; `blocking` repairs only CRITICAL/HIGH |
+| `static.restageFixes` | `true` | Re-stage previously staged paths after each repair round |
+| `static.semgrepConfigs` | security packs | Registry packs passed as `--config` |
+| `ai.enabled` | `true` | Run the AI review |
+| `ai.model` | `""` | Copilot model id; empty means "whatever the CLI is set to" |
+| `ai.timeoutSec` | `600` | Hard limit on a review run (fixers get double) |
+| `ai.autofixBlocking` | `true` | Repair CRITICAL/HIGH automatically, then re-review |
+| `ai.maxFixLoops` | `3` | Repair rounds for blocking findings, and triage rounds after your own picks |
+| `ai.triageFindings` | `true` | Offer the numbered picker over every finding |
+| `ai.verifyIntent` | `true` | Check the change against the PR description, claim by claim |
+| `ai.impactAnalysis` | `true` | Precompute who else depends on the contracts the change touched |
+| `ai.critiqueModel` | `gpt-5.6-sol` | Model that gives the second opinion on the findings |
+| `ai.critiqueRounds` | `2` | Critique/correction rounds; `0` disables the second opinion |
+| `agentStop.static` | `true` | Run Semgrep when the agent finishes a turn |
+| `agentStop.ai` | `false` | Also run the AI review on each turn |
+| `agentStop.maxTurns` | `20` | Times the hook may block a single session |
+| `explain.enabled` | `true` | Offer `[e]` at the blocked and triage prompts, and allow `inhousecode explain` |
+| `explain.autoLaunch` | `true` | Start the Copilot session directly; `false` writes the briefing and prints the command |
+| `explain.contextLines` | `5` | Source lines shown either side of each finding (max 25) |
+| `explain.model` | `""` | Model for the explain session only; empty means "whatever the CLI is set to" |
+| `rulebook` | `.inhousecode/developer-rulebook.md` | Path to the team rulebook, relative to the repo root |
 
 ## `triggers`
 
@@ -26,7 +65,7 @@ flags. Explicit flags (`--pre-commit`, `--agent-stop`) always win.
 | Key | Default | Meaning |
 |---|---|---|
 | `enabled` | `true` | Run Semgrep at all |
-| `autofix` | `true` | Hand findings to a fixer agent and re-scan |
+| `autofix` | `false` | Hand findings to a fixer agent and re-scan |
 | `maxFixLoops` | `20` | Repair-round budget (max 20) |
 | `fixSeverity` | `"all"` | `all` repairs every finding; `blocking` repairs only CRITICAL/HIGH |
 | `restageFixes` | `true` | Re-stage previously staged paths after each repair round |

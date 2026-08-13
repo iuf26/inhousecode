@@ -172,7 +172,7 @@ run_explain_session() {
   MODEL_FLAG=()
   [ -n "${INHOUSECODE_EXPLAIN_MODEL:-}" ] && MODEL_FLAG=(--model "$INHOUSECODE_EXPLAIN_MODEL")
 
-  "$COPILOT_PATH" -i "$prompt" "${MODEL_FLAG[@]}" \
+  "$COPILOT_PATH" -i "$prompt" "${MODEL_FLAG[@]+"${MODEL_FLAG[@]}"}" \
     "${EXPLAIN_PERMISSIONS[@]}" < /dev/tty > /dev/tty 2>&1
   EXPLAIN_RC=$?
   if [ "$EXPLAIN_RC" -ne 0 ]; then
@@ -202,8 +202,8 @@ run_review_agent() {
   agent_output_format
 
   "$TIMEOUT_BIN" "$INHOUSECODE_AI_TIMEOUT_SEC" "$COPILOT_PATH" -p "$prompt" \
-    "${MODEL_FLAG[@]}" "${quiet[@]}" "${REVIEW_PERMISSIONS[@]}" \
-    "${AGENT_OUTPUT_FORMAT[@]}" --no-color > "$log" 2>&1 < /dev/null
+    "${MODEL_FLAG[@]+"${MODEL_FLAG[@]}"}" "${quiet[@]+"${quiet[@]}"}" "${REVIEW_PERMISSIONS[@]}" \
+    "${AGENT_OUTPUT_FORMAT[@]+"${AGENT_OUTPUT_FORMAT[@]}"}" --no-color > "$log" 2>&1 < /dev/null
   REVIEW_RC=$?
   usage_record "review" "$log"
   REVIEW_OUTPUT="$(strip_cr "$(agent_text "$log")")" || { REVIEW_RC=1; REVIEW_OUTPUT=""; }
@@ -225,8 +225,8 @@ run_critique_agent() {
   agent_output_format
 
   "$TIMEOUT_BIN" "$INHOUSECODE_AI_TIMEOUT_SEC" "$COPILOT_PATH" -p "$prompt" \
-    "${model[@]}" "${quiet[@]}" "${REVIEW_PERMISSIONS[@]}" \
-    "${AGENT_OUTPUT_FORMAT[@]}" --no-color > "$log" 2>&1 < /dev/null
+    "${model[@]+"${model[@]}"}" "${quiet[@]+"${quiet[@]}"}" "${REVIEW_PERMISSIONS[@]}" \
+    "${AGENT_OUTPUT_FORMAT[@]+"${AGENT_OUTPUT_FORMAT[@]}"}" --no-color > "$log" 2>&1 < /dev/null
   CRITIQUE_RC=$?
   usage_record "second opinion" "$log"
   CRITIQUE_OUTPUT="$(strip_cr "$(agent_text "$log")")" ||
@@ -245,8 +245,8 @@ run_fix_agent() {
   agent_output_format
 
   "$TIMEOUT_BIN" "$budget" "$COPILOT_PATH" -p "$prompt" \
-    "${MODEL_FLAG[@]}" "${quiet[@]}" "${FIX_PERMISSIONS[@]}" \
-    "${AGENT_OUTPUT_FORMAT[@]}" --no-color > "$log" 2>&1 < /dev/null
+    "${MODEL_FLAG[@]+"${MODEL_FLAG[@]}"}" "${quiet[@]+"${quiet[@]}"}" "${FIX_PERMISSIONS[@]}" \
+    "${AGENT_OUTPUT_FORMAT[@]+"${AGENT_OUTPUT_FORMAT[@]}"}" --no-color > "$log" 2>&1 < /dev/null
   FIX_RC=$?
   usage_record "$label" "$log"
   if [ "$FIX_RC" -ne 0 ]; then

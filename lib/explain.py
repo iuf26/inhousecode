@@ -28,9 +28,10 @@ from pathlib import Path
 SEVERITY_ORDER = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3}
 BLOCKING_SEVERITIES = {"CRITICAL", "HIGH"}
 FINDING_FIELDS = 5
-# A rulebook entry: "- [ ] id (scope) — the rule".
+# A rulebook entry: "- id (scope) — the rule". The old "- [ ] id ..." checkbox
+# form still parses too, since rulebooks already written that way shouldn't break.
 RULEBOOK_ENTRY = re.compile(
-    r"^\s*-\s*\[[^\]]*\]\s*"
+    r"^\s*-\s*(?:\[[^\]]*\]\s*)?"
     r"(?P<id>[A-Za-z0-9][A-Za-z0-9._-]*)\s*"
     r"\((?P<scope>[^)]*)\)\s*"
     r"[\u2014\u2013-]+\s*"
