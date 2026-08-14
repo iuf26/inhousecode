@@ -39,6 +39,18 @@ That's the whole idea behind the name: rules declared **in-house**.
 Curious why the tools already on the market didn't fit? Read the
 five-minute pitch in [docs/concept.md](docs/concept.md).
 
+## 🆚 How it compares
+
+| | inhousecode | Claude Code Review | GitHub Copilot code review |
+|---|---|---|---|
+| **When it runs** | Before the commit, or the instant an agent finishes a turn | After the PR is pushed | After the PR is pushed |
+| **Rules** | `.inhousecode/developer-rulebook.md` — a file your team owns | `CLAUDE.md` / `REVIEW.md` | `.github/copilot-instructions.md` |
+| **Deterministic floor** | Semgrep runs before any model opines | Model only | Model only |
+| **Cost** | Free to self-host — you just need a Copilot CLI subscription. (A paid [managed cloud version](#️-managed-cloud-version) also exists, priced on request.) | ~$15–25/review | Included in paid Copilot plans |
+
+Full writeup, including where the hosted options win (whole-codebase context,
+zero setup): [docs/comparison.md](docs/comparison.md).
+
 ## 🚀 Example
 
 Review what's staged, right before you commit:
