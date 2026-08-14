@@ -141,8 +141,21 @@ def read_source(finding: Finding, args: argparse.Namespace) -> list[str] | None:
 
     Staged mode judges the index, not the working tree (invariant 6), so an
     excerpt taken from disk could show lines that were never under review.
+
+    finding.path comes from a gate finding's location field, which for the AI
+    gate is model output over reviewed (and possibly adversarial) diff content.
+    It must resolve to a path inside the repository before anything reads it -
+    otherwise an absolute path or a '..' escape lets a crafted finding pull
+    arbitrary local file content (e.g. ~/.ssh/id_rsa) into the explain briefing
+    that gets sent to the model.
     """
     if not finding.path:
+        return None
+    repo_root = Path(args.repo_root).resolve()
+    resolved = (repo_root / finding.path).resolve()
+    try:
+        resolved.relative_to(repo_root)
+    except ValueError:
         return None
     revision = ""
     if args.target_mode == "staged":
@@ -166,11 +179,10 @@ def read_source(finding: Finding, args: argparse.Namespace) -> list[str] | None:
         # A file the index does not have (a worktree-only repair) still has a
         # readable copy on disk; fall through rather than dropping the excerpt.
 
-    candidate = Path(args.repo_root) / finding.path
     try:
-        if not candidate.is_file():
+        if not resolved.is_file():
             return None
-        return candidate.read_text(encoding="utf-8", errors="replace").splitlines()
+        return resolved.read_text(encoding="utf-8", errors="replace").splitlines()
     except (OSError, ValueError):
         return None
 

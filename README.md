@@ -107,7 +107,7 @@ covered, and we'll come back to you.
 
 ```bash
 git clone https://github.com/iuf26/inhousecode.git && cd inhousecode
-bash install.sh --with-semgrep          # macOS / Linux / Git Bash
+bash install.sh       # macOS / Linux / Git Bash
 inhousecode doctor                      # confirms every dependency resolves
 ```
 
