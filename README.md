@@ -7,7 +7,8 @@
 <a href="docs/concept.md"><strong>Why inhousecode</strong></a> •
 <a href="docs/business-case.md"><strong>Business Case</strong></a> •
 <a href="docs/"><strong>Docs</strong></a> •
-<a href="#-how-to-contribute"><strong>Contribute</strong></a> •
+<a href="CONTRIBUTING.md"><strong>Contribute</strong></a> •
+<a href="CODE_OF_CONDUCT.md"><strong>Code of Conduct</strong></a> •
 <a href="LICENSE"><strong>License</strong></a>
 </p>
 
@@ -15,7 +16,7 @@
 <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT License"></a>
 </p>
 
-## ℹ️ About
+## About
 
 > Reviewing code an AI wrote, with a tool that knows nothing about your team?
 > **inhousecode is here to help.**
@@ -25,33 +26,37 @@ AI-generated code: deterministic Semgrep first, then an AI reviewer that
 enforces rules **your team writes down** — not a vendor's idea of clean code.
 That's the whole idea behind the name: rules declared **in-house**.
 
-- 🛡️ A deterministic Semgrep floor runs before any model opines, with a
+- A deterministic Semgrep floor runs before any model opines, with a
   bounded auto-repair loop (up to 20 rounds)
-- 📓 The AI review reads `.inhousecode/developer-rulebook.md` — a plain file
+- The AI review reads `.inhousecode/developer-rulebook.md` — a plain file
   your team owns — and cites the exact rule it's enforcing on every finding
-- 🚦 Blocking findings (CRITICAL/HIGH) get fixed and re-reviewed
+- Blocking findings (CRITICAL/HIGH) get fixed and re-reviewed
   automatically; opinions (MEDIUM/LOW) get numbered and left to **you**
-- ⏱️ Runs at `git commit`, or the moment your coding agent finishes a turn —
+- Runs at `git commit`, or the moment your coding agent finishes a turn —
   before you ever see the diff
-- 🔓 No vendor lock-in: your rules live in a markdown file, checked into your
+- No vendor lock-in: your rules live in a markdown file, checked into your
   own repo
+
+> **Requires a [GitHub Copilot CLI](https://github.com/github/copilot-cli)
+> subscription** — inhousecode uses it as the model backend for the AI review
+> phase. See [Installation](#installation) for the full dependency list.
 
 Curious why the tools already on the market didn't fit? Read the
 five-minute pitch in [docs/concept.md](docs/concept.md).
 
-## 🆚 How it compares
+## How it compares
 
 | | inhousecode | Claude Code Review | GitHub Copilot code review |
 |---|---|---|---|
 | **When it runs** | Before the commit, or the instant an agent finishes a turn | After the PR is pushed | After the PR is pushed |
 | **Rules** | `.inhousecode/developer-rulebook.md` — a file your team owns | `CLAUDE.md` / `REVIEW.md` | `.github/copilot-instructions.md` |
 | **Deterministic floor** | Semgrep runs before any model opines | Model only | Model only |
-| **Cost** | Free to self-host — you just need a Copilot CLI subscription. (A paid [managed cloud version](#️-managed-cloud-version) also exists, priced on request.) | ~$15–25/review | Included in paid Copilot plans |
+| **Cost** | Free to self-host — you just need a Copilot CLI subscription. (A paid [managed cloud version](#managed-cloud-version) also exists, priced on request.) | ~$15–25/review | Included in paid Copilot plans |
 
 Full writeup, including where the hosted options win (whole-codebase context,
 zero setup): [docs/comparison.md](docs/comparison.md).
 
-## 🚀 Example
+## Example
 
 Review what's staged, right before you commit:
 
@@ -70,7 +75,7 @@ fixes have already been applied wherever they weren't a judgment call.
 
 Full command reference: [docs/usage.md](docs/usage.md).
 
-## 📊 For engineering leads — why adopt this
+## For engineering leads — why adopt this
 
 Evaluating this for a team rather than using it day to day? The case is written
 out in full, in non-technical terms, in
@@ -91,7 +96,7 @@ The short version: review moves *before* the commit instead of after the push,
 the standard it enforces is one your team wrote down, there's no procurement and
 no new vendor, and it's reversible by removing a single hook.
 
-## ☁️ Managed cloud version
+## Managed cloud version
 
 Everything else on this page describes the **self-hosted** tool: MIT-licensed,
 free, and yours to run. For teams that would rather not run it themselves,
@@ -115,7 +120,7 @@ covered, and we'll come back to you.
 > you own. See [self-hosted or managed](docs/business-case.md#self-hosted-or-managed)
 > for a side-by-side.
 
-## ⬇️ Installation
+## Installation
 
 ```bash
 git clone https://github.com/iuf26/inhousecode.git && cd inhousecode
@@ -129,31 +134,32 @@ Then, in each repository you want reviewed:
 inhousecode init && inhousecode install-hooks
 ```
 
-**Requires:** git, Python 3, [Semgrep](https://semgrep.dev),
-[Copilot CLI](https://github.com/github/copilot-cli), GNU `timeout`
-(Windows: Git Bash).
+**Requires:**
+
+- git
+- Python 3
+- [Semgrep](https://semgrep.dev) — runs the deterministic review floor
+- [Copilot CLI](https://github.com/github/copilot-cli) — the model backend for the AI review phase
+- GNU timeout (from `coreutils`; on macOS installed as `gtimeout` via
+  `brew install coreutils`, which inhousecode also accepts) — bounds every
+  agent run so a stuck model can't hang a commit
+- Windows: Git Bash, to run the above in a POSIX-like shell
 
 Minimum versions, Windows steps, hook internals, and uninstalling:
 [docs/installation.md](docs/installation.md). Config reference:
 [docs/configuration.md](docs/configuration.md). First time setting this up?
 Follow [docs/getting-started/](docs/getting-started/) page by page.
 
-## 💭 How to contribute
+## How to contribute
 
 Found a bug, have an idea, or disagree with a design choice? Open an issue —
 this is early, and feedback shapes it more than anything else right now.
 
-Before sending a pull request:
+Full guidelines, including the PR checklist and project conventions, are in
+[CONTRIBUTING.md](CONTRIBUTING.md). By participating, you're expected to
+follow the [Code of Conduct](CODE_OF_CONDUCT.md).
 
-- Skim [AGENTS.md](AGENTS.md) for the project's invariants — several
-  behaviors (like the review agent never getting write access) are
-  load-bearing, not stylistic.
-- Adding a config key touches the schema, the default, and
-  [docs/configuration.md](docs/configuration.md) together — keep them in
-  sync.
-- Walk through [docs/testing.md](docs/testing.md) before opening the PR.
-
-## 📖 Further reading
+## Further reading
 
 | | |
 |---|---|
@@ -164,6 +170,8 @@ Before sending a pull request:
 | [docs/architecture.md](docs/architecture.md) | The pipeline, the finding contract, trust boundaries |
 | [docs/comparison.md](docs/comparison.md) | vs. Claude Code Review and Copilot code review — cost, control, and what each wins on |
 | [docs/team-customization.md](docs/team-customization.md) | Writing the rulebook, rolling it out to a team |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | How to file issues and send PRs |
+| [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) | Community standards and enforcement |
 
 ## License
 
