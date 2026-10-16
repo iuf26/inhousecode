@@ -40,6 +40,27 @@ governed knowledge **your team approves** — not a vendor's idea of clean code.
 - Candidate feedback is preserved, classified, and promoted only under explicit
   policy; high-impact changes require human approval
 
+```mermaid
+flowchart LR
+    D["Your diff"] --> P1
+    subgraph P1["Phase 1 — Semgrep"]
+        direction TB
+        S1["Deterministic pattern match<br/>no model, bounded auto-repair"]
+    end
+    P1 -->|floor holds| P2
+    subgraph P2["Phase 2 — AI review"]
+        direction TB
+        S2["Reads the diff + your team's<br/>governed OpenViking knowledge"]
+    end
+    P2 --> V["Verdict: exit code,<br/>numbered findings, fixes applied"]
+```
+
+| Phase | Checks for | Decides |
+|---|---|---|
+| **1 — Semgrep** | Injection, hard-coded secrets, unsafe deserialization | Pattern matching; no model, so nothing to talk it out of a finding |
+| **2 — AI review** | Everything else, against your team's own rules | A model, only once the floor already held |
+| **Severity** | CRITICAL/HIGH → fixed automatically, re-checked | MEDIUM/LOW → numbered, left to **you** unless you opt into `--fix` |
+
 ## Current functionality
 
 inhousecode currently offers the following capabilities.
