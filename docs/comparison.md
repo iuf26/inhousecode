@@ -15,16 +15,12 @@ where that gap is real and where it isn't.
 The two incumbents are both **hosted review services attached to a pull
 request**. That shape decides almost everything else about them:
 
-- The review happens *after* the code is pushed, on someone else's
-  infrastructure, in a place where the feedback loop is a PR comment thread.
-- Everything the reviewer knows comes from one model reading a diff. There is
-  no deterministic layer underneath it — if the model misses the SQL injection,
-  nothing else was looking.
-- Findings are advisory. Neither product blocks a merge on its own, on purpose,
-  so existing workflows stay intact.
-- The review method is closed. You supply instructions; the pipeline that
-  interprets them is the vendor's, and you cannot open it, change it, or add a
-  step to it.
+| That shape means | In practice |
+|---|---|
+| **Review happens after the push** | On someone else's infrastructure, feedback loop is a PR comment thread |
+| **One model, no deterministic layer** | If the model misses the SQL injection, nothing else was looking |
+| **Findings are advisory** | Neither product blocks a merge on its own, on purpose — existing workflows stay intact |
+| **The review method is closed** | You supply instructions; the vendor's pipeline interprets them — you cannot open it, change it, or add a step |
 
 That's a good product shape for "add a second opinion to our PRs." It is not
 the shape of "nothing reaches the branch until it clears a bar our team
@@ -36,30 +32,28 @@ The honest version of the pitch: if PR-time advisory comments are what you
 want, the incumbents do that better than this project will. Read on if you want
 the gate.
 
+```mermaid
+flowchart TD
+    Q["What do you actually want?"]
+    Q -->|"A second opinion on a PR,<br/>zero setup"| A["Copilot code review"]
+    Q -->|"Deepest possible analysis,<br/>whole-codebase context"| B["Claude Code Review"]
+    Q -->|"Nothing merges until it clears<br/>a bar YOUR team defined"| C["inhousecode"]
+```
+
 ## What Claude Code Review offers
 
 Anthropic's managed service ([docs](https://code.claude.com/docs/en/code-review)),
 currently in research preview for Team and Enterprise plans.
 
-- **Where it runs**: Anthropic infrastructure, via a GitHub App. Not available
-  to orgs with Zero Data Retention enabled.
-- **How it reviews**: a fleet of specialized agents analyze the diff *and the
-  surrounding codebase* in parallel, each hunting a different class of issue,
-  followed by a verification step that checks candidates against real code
-  behavior to strip false positives. This is genuinely strong — full-codebase
-  context is the thing local tooling struggles hardest to match.
-- **Triggers**: once per PR, on every push, or manual via `@claude review` /
-  `@claude review always`.
-- **Customization**: `CLAUDE.md` (project context; violations surface as nits)
-  and `REVIEW.md` (review-only instructions injected into every agent as
-  highest priority — severity recalibration, nit caps, skip rules,
-  repo-specific checks, verification bars).
-- **Severity**: 🔴 Important / 🟡 Nit / 🟣 Pre-existing. The check run always
-  completes **neutral**, so it never blocks a merge; you gate it yourself by
-  parsing the check-run output in your own CI.
-- **Cost**: **$15–25 per review** on average, scaling with PR size and
-  complexity, billed as usage credits separate from your plan. Reviews take
-  ~20 minutes. "After every push" multiplies that by the number of pushes.
+| | |
+|---|---|
+| **Where it runs** | Anthropic infrastructure, via a GitHub App. Not available to orgs with Zero Data Retention enabled |
+| **How it reviews** | A fleet of specialized agents analyze the diff *and the surrounding codebase* in parallel, each hunting a different class of issue, then a verification step checks candidates against real code behavior to strip false positives. Genuinely strong — full-codebase context is what local tooling struggles hardest to match |
+| **Triggers** | Once per PR, on every push, or manual via `@claude review` / `@claude review always` |
+| **Customization** | `CLAUDE.md` (project context; violations surface as nits) and `REVIEW.md` (review-only instructions injected into every agent as highest priority — severity recalibration, nit caps, skip rules, repo-specific checks, verification bars) |
+| **Severity** | 🔴 Important / 🟡 Nit / 🟣 Pre-existing |
+| **Can it block?** | No — the check run always completes **neutral**; you gate it yourself by parsing the check-run output in your own CI |
+| **Cost** | **$15–25 per review** on average, scaling with PR size and complexity, billed as usage credits separate from your plan. Reviews take ~20 minutes. "After every push" multiplies that by the number of pushes |
 
 There is also `/code-review` in the Claude Code CLI — free of the GitHub App,
 runs locally as a background subagent, supports `--fix` and `--comment`. That's
@@ -72,27 +66,15 @@ closest existing analogue to what inhousecode does locally. It does **not** read
 GitHub's reviewer ([docs](https://docs.github.com/en/copilot/concepts/agents/code-review)),
 included in all paid Copilot plans.
 
-- **Where it runs**: GitHub.com, GitHub CLI, GitHub Mobile, VS Code, Visual
-  Studio, JetBrains, Xcode, and Azure DevOps (preview). The broadest surface
-  area of the three by a distance.
-- **Triggers**: manual on demand, or automatic at user / repo / org level,
-  including on draft PRs and on every push.
-- **Customization**: `.github/copilot-instructions.md` (repo-wide),
-  `.github/instructions/**/*.instructions.md` (path-scoped), `AGENTS.md`,
-  `.github/skills/`, plus MCP servers. It now also reads `REVIEW.md`,
-  `CLAUDE.md`, and `GEMINI.md`, so customization written for other tools is
-  picked up automatically.
-- **Effort levels**: Lite (default, fast) and Balanced (higher-reasoning model
-  for complex logic and security-sensitive code).
-- **Merge blocking**: not on its own. GitHub Code Quality rulesets can gate
-  merges alongside it.
-- **Cost**: roughly **$0.05–$1 per review** on Lite, **$0.25–$5** on Balanced,
-  drawn from AI credits — with GitHub Actions minutes billed separately on top,
-  and consumption rising with PR size *and* with the size of your custom
-  instructions. Still an order of magnitude cheaper than the Claude service.
-- **Stated limitation**, verbatim from the docs: "Copilot is not guaranteed to
-  spot all problems or issues in a pull request. Sometimes it will make
-  mistakes."
+| | |
+|---|---|
+| **Where it runs** | GitHub.com, GitHub CLI, GitHub Mobile, VS Code, Visual Studio, JetBrains, Xcode, and Azure DevOps (preview) — the broadest surface area of the three by a distance |
+| **Triggers** | Manual on demand, or automatic at user / repo / org level, including on draft PRs and on every push |
+| **Customization** | `.github/copilot-instructions.md` (repo-wide), `.github/instructions/**/*.instructions.md` (path-scoped), `AGENTS.md`, `.github/skills/`, plus MCP servers. Also reads `REVIEW.md`, `CLAUDE.md`, and `GEMINI.md` automatically |
+| **Effort levels** | Lite (default, fast) and Balanced (higher-reasoning model for complex logic and security-sensitive code) |
+| **Can it block?** | Not on its own. GitHub Code Quality rulesets can gate merges alongside it |
+| **Cost** | roughly **$0.05–$1 per review** on Lite, **$0.25–$5** on Balanced, drawn from AI credits — GitHub Actions minutes billed separately on top, consumption rising with PR size *and* custom-instruction size |
+| **Stated limitation** (verbatim) | "Copilot is not guaranteed to spot all problems or issues in a pull request. Sometimes it will make mistakes." |
 
 ## The comparison with inhousecode
 
@@ -163,18 +145,10 @@ reading it rather than by trusting the table:
 
 ## Where each one genuinely wins
 
-**Claude Code Review** wins on depth. Parallel specialized agents reading your
-whole codebase will find classes of bug that a diff-scoped local review cannot
-see, and the verification pass is a real answer to false positives. If your
-constraint is "catch the subtle regression in a 2,000-file service" and the
-budget is there, it's the strongest reviewer of the three. The trade is $15–25
-a pop, ~20 minutes, your code on someone else's infrastructure, and a review
-that can only ever advise.
-
-**Copilot code review** wins on reach and price. It's everywhere your team
-already is, costs cents, and reads every instruction file format anyone has
-invented. If you want a light second pair of eyes on every PR with essentially
-no cost or setup decision to make, this is the pragmatic default.
+| | Wins on | Pick it when | The trade |
+|---|---|---|---|
+| **Claude Code Review** | Depth | "Catch the subtle regression in a 2,000-file service," budget is there | $15–25/review, ~20 min, your code on someone else's infrastructure, advisory-only |
+| **Copilot code review** | Reach and price | A light second pair of eyes on every PR, essentially no setup decision | Model-only, no deterministic floor, advisory unless paired with Code Quality rulesets |
 
 **inhousecode** wins on **control**, and that word is doing specific work:
 
