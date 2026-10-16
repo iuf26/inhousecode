@@ -2,12 +2,8 @@
 """Build the explain briefing from a normalized finding list.
 
 The briefing is the deterministic half of ``inhousecode explain``: no model is
-involved in producing it. It restates every finding with two things the terminal
-table has no room for -- the team rule it violates, quoted verbatim from the
-rulebook, and the source lines it points at.
-
-Quoting the rule verbatim matters: "which rule did I break" is then answered by
-the file the team wrote, not paraphrased by a model that may drift from it.
+involved in producing it. It restates every finding with the review category
+and the source lines it points at.
 
 Input is a tab-separated record per finding, already de-duplicated by the shared
 ``select_findings`` helper so the markers stay defined in exactly one place:
@@ -20,6 +16,7 @@ Usage:  explain.py --findings <tsv> --out <briefing.md> [options]
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import subprocess
 import sys
@@ -28,21 +25,16 @@ from pathlib import Path
 SEVERITY_ORDER = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3}
 BLOCKING_SEVERITIES = {"CRITICAL", "HIGH"}
 FINDING_FIELDS = 5
-# A rulebook entry: "- id (scope) — the rule". The old "- [ ] id ..." checkbox
-# form still parses too, since rulebooks already written that way shouldn't break.
-RULEBOOK_ENTRY = re.compile(
-    r"^\s*-\s*(?:\[[^\]]*\]\s*)?"
-    r"(?P<id>[A-Za-z0-9][A-Za-z0-9._-]*)\s*"
-    r"\((?P<scope>[^)]*)\)\s*"
-    r"[\u2014\u2013-]+\s*"
-    r"(?P<rule>.+?)\s*$"
-)
-# Below this length an id match on a substring is noise rather than a signal.
-MIN_FUZZY_RULE_ID = 4
 # Excerpts are context, not the file. A wide window buries the marked line.
 MAX_CONTEXT_LINES = 25
 LOCATION = re.compile(r"^(?P<path>.+):(?P<line>\d+)$")
 GATE_LABELS = {"static": "Semgrep (phase 1)", "review": "AI review (phase 2)"}
+MEMORY_HEADING_SCOPES = {
+    "## Promoted project knowledge": "project",
+    "## Promoted global knowledge": "global",
+}
+MEMORY_RECORD = re.compile(r"^- \[(?P<id>[^]]+)] (?P<content>.+)$")
+MEMORY_URI = re.compile(r"^\s+URI: (?P<uri>[^;]+);")
 
 
 class Finding:
@@ -87,53 +79,30 @@ def read_findings(path: Path) -> list[Finding]:
     return findings
 
 
-def parse_rulebook(path: Path) -> dict[str, dict[str, str]]:
-    """Map rule id -> {line, scope, rule} for every entry in the rulebook."""
+def parse_memory_rules(context: str) -> dict[str, dict[str, str]]:
+    """Extract promoted rule provenance from the frozen prompt context."""
     rules: dict[str, dict[str, str]] = {}
-    if not path or not path.is_file():
-        return rules
-    try:
-        raw = path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return rules
-    for row in raw.splitlines():
-        match = RULEBOOK_ENTRY.match(row)
-        if not match:
+    scope = ""
+    current_id = ""
+    for line in context.splitlines():
+        if line.startswith("## "):
+            scope = MEMORY_HEADING_SCOPES.get(line.strip(), "")
+            current_id = ""
             continue
-        rule_id = match.group("id").strip()
-        rules[rule_id.lower()] = {
-            "id": rule_id,
-            "scope": match.group("scope").strip(),
-            "rule": match.group("rule").strip(),
-            "line": row.strip(),
-        }
+        match = MEMORY_RECORD.match(line)
+        if match and scope:
+            current_id = match.group("id")
+            rules[current_id] = {
+                "scope": scope,
+                "content": match.group("content").strip(),
+                "uri": "",
+            }
+            continue
+        uri_match = MEMORY_URI.match(line)
+        if uri_match and current_id:
+            rules[current_id]["uri"] = uri_match.group("uri").strip()
     return rules
 
-
-def normalize_id(value: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
-
-
-def match_rule(category: str, rules: dict[str, dict[str, str]]) -> dict[str, str] | None:
-    """Resolve a finding's category to a rulebook entry.
-
-    The reviewer is asked to cite the rule id in the category field, so an exact
-    match is the common case. The fuzzy pass catches a category that wrapped the
-    id in extra words ("violates no-broad-except").
-    """
-    if not rules:
-        return None
-    normalized = normalize_id(category)
-    if not normalized:
-        return None
-    if normalized in rules:
-        return rules[normalized]
-    for rule_id, entry in rules.items():
-        if len(rule_id) < MIN_FUZZY_RULE_ID:
-            continue
-        if rule_id in normalized or normalized in rule_id:
-            return entry
-    return None
 
 
 def read_source(finding: Finding, args: argparse.Namespace) -> list[str] | None:
@@ -216,15 +185,8 @@ def render(findings: list[Finding], rules: dict, args: argparse.Namespace) -> st
     out.append("")
     out.append(f"- Repository: `{args.repo_root}`")
     out.append(f"- Review target: {args.target_mode}")
-    if args.rulebook_path:
-        out.append(f"- Team rulebook: `{args.rulebook_path}`")
-    else:
-        out.append("- Team rulebook: none in this repository")
     out.append("")
-    out.append(
-        "Each finding below is stated as the gate produced it. Rule text is "
-        "quoted verbatim from the rulebook; excerpts are the reviewed content."
-    )
+    out.append("Each finding below is stated as the gate produced it; excerpts are the reviewed content.")
     out.append("")
 
     for index, finding in enumerate(findings, start=1):
@@ -240,21 +202,21 @@ def render(findings: list[Finding], rules: dict, args: argparse.Namespace) -> st
         out.append(f"- Found by: {gate} ({blocking_label})")
         out.append(f"- Gate's one-line fix: {finding.fix}")
 
-        entry = match_rule(finding.category, rules)
-        if entry:
-            out.append(f"- Rule violated (verbatim from the rulebook): `{entry['id']}`")
-            out.append("")
-            out.append(f"  > {entry['line']}")
-        elif finding.gate == "static":
+        rule = rules.get(finding.category)
+        if finding.gate == "static":
             out.append(
-                f"- Rule violated: Semgrep rule `{finding.category}` "
-                "(no matching team rule)"
+                f"- Rule violated: Semgrep rule `{finding.category}`"
             )
+            out.append("- Rule source: static analysis")
+        elif rule:
+            out.append(f"- Rule source: promoted {rule['scope']} knowledge")
+            out.append(f"- Rule: {rule['content']}")
+            out.append(f"- Memory record: `{finding.category}`")
+            if rule.get("uri"):
+                out.append(f"- Memory URI: `{rule['uri']}`")
         else:
-            out.append(
-                "- Rule violated: no team rule matched; this is a general "
-                "review criterion"
-            )
+            out.append(f"- Review category `{finding.category}`")
+            out.append("- Rule source: built-in AI review guidance")
         out.append("")
 
         excerpt = build_excerpt(
@@ -278,8 +240,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--findings", required=True)
     parser.add_argument("--out", required=True)
     parser.add_argument("--repo-root", default=".")
-    parser.add_argument("--rulebook", default="")
-    parser.add_argument("--rulebook-path", default="")
+
     parser.add_argument("--target-mode", default="staged")
     parser.add_argument("--diff-head", default="HEAD")
     parser.add_argument("--diff-source", default="commit")
@@ -295,7 +256,7 @@ def main(argv: list[str]) -> int:
     if not findings:
         print("explain: no findings to brief", file=sys.stderr)
         return 1
-    rules = parse_rulebook(Path(args.rulebook)) if args.rulebook else {}
+    rules = parse_memory_rules(os.environ.get("AI_MEMORY_CONTEXT", ""))
     briefing = render(findings, rules, args)
     out_path = Path(args.out)
     try:

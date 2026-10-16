@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Copilot CLI invocation layer.
+# Agent invocation layer.
 #
 # Three very different call shapes are used, and keeping them apart matters:
 #
@@ -14,6 +14,13 @@
 # The headless two are wrapped in a hard timeout so a stalled model can never
 # hang a commit. The interactive one is not: bounding a human conversation would
 # be absurd.
+#
+# The actual CLI binary and flag translation is handled by the harness
+# abstraction (lib/harness.sh + lib/harness_*.sh). This file owns cost
+# accounting, prompt construction, and the run/classify lifecycle.
+
+# shellcheck source=harness.sh
+source "$INHOUSECODE_HOME/lib/harness.sh"
 
 # --- named constants ---------------------------------------------------------
 FIX_AGENT_TIMEOUT_MULTIPLIER=2
@@ -33,32 +40,6 @@ agent_output_format() {
   [ -n "${PYTHON_CMD:-}" ] && AGENT_OUTPUT_FORMAT=(--output-format json)
 }
 
-REVIEW_PERMISSIONS=(
-  --allow-tool=read
-  --deny-tool=write,shell,url
-  --no-ask-user
-  --no-custom-instructions
-)
-FIX_PERMISSIONS=(
-  --allow-tool=read,write
-  --deny-tool=url
-  --no-ask-user
-)
-# Read is pre-approved so exploring a finding is frictionless; everything that
-# can change the tree is left to prompt, because the developer is right there
-# and this session is theirs, not the gate's.
-EXPLAIN_PERMISSIONS=(
-  --allow-tool=read
-  --deny-tool=url
-)
-
-copilot_model_flag() {
-  # Empty model means "let the Copilot CLI pick", which respects the user's
-  # own /model choice instead of pinning a model the team may not have.
-  MODEL_FLAG=()
-  [ -n "${INHOUSECODE_AI_MODEL:-}" ] && MODEL_FLAG=(--model "$INHOUSECODE_AI_MODEL")
-}
-
 # --- cost accounting ---------------------------------------------------------
 #
 # A review spends the developer's AI budget, so the run says what it spent. The
@@ -71,6 +52,7 @@ copilot_model_flag() {
 # reason to block a commit.
 USAGE_TOTAL_NANO=0
 USAGE_TOTAL_PREMIUM=0
+USAGE_TOTAL_USD=0
 USAGE_RUNS=0
 USAGE_BREAKDOWN=""
 USAGE_INCOMPLETE=0
@@ -78,6 +60,7 @@ USAGE_INCOMPLETE=0
 usage_reset() {
   USAGE_TOTAL_NANO=0
   USAGE_TOTAL_PREMIUM=0
+  USAGE_TOTAL_USD=0
   USAGE_RUNS=0
   USAGE_BREAKDOWN=""
   USAGE_INCOMPLETE=0
@@ -88,6 +71,13 @@ usage_reset() {
 # formats stay interchangeable from the caller's point of view.
 agent_text() {
   local log="$1"
+  # Hermes chat emits plain text plus a session id, not the JSONL envelope used
+  # by Copilot and Claude Code. Keep its response intact so the gate can parse
+  # the review contract directly.
+  if [ "${INHOUSECODE_HARNESS:-}" = "hermes" ]; then
+    cat "$log" 2>/dev/null
+    return 0
+  fi
   if [ -z "${PYTHON_CMD:-}" ]; then
     cat "$log" 2>/dev/null
     return 0
@@ -96,25 +86,35 @@ agent_text() {
 }
 
 # usage_record <label> <log> -- add one agent run to the running total.
+#
+# usage.py's output is nano<TAB>premium<TAB>usd. Copilot reports nano-AIU;
+# Claude Code and Hermes report USD directly. Both are accumulated so the
+# summary can print whichever ended up non-zero, without the caller needing
+# to know which harness produced the log.
 usage_record() {
-  local label="$1" log="$2" raw nano premium
+  local label="$1" log="$2" raw nano premium usd
   USAGE_RUNS=$((USAGE_RUNS + 1))
   if [ -z "${PYTHON_CMD:-}" ]; then
     USAGE_INCOMPLETE=1
     return 0
   fi
   raw="$("${PYTHON_CMD[@]}" "$INHOUSECODE_HOME/lib/usage.py" --log "$log" --mode usage 2>/dev/null)" || raw=""
-  nano="${raw%%	*}"
-  premium="${raw##*	}"
+  nano="$(printf '%s' "$raw" | awk -F'	' '{ print $1 }')"
+  premium="$(printf '%s' "$raw" | awk -F'	' '{ print $2 }')"
+  usd="$(printf '%s' "$raw" | awk -F'	' '{ print $3 }')"
   case "$nano" in
     ''|*[!0-9]*) USAGE_INCOMPLETE=1; return 0 ;;
   esac
   case "$premium" in
     ''|*[!0-9]*) premium=0 ;;
   esac
+  case "$usd" in
+    ''|*[!0-9.]*) usd=0 ;;
+  esac
   USAGE_TOTAL_NANO=$((USAGE_TOTAL_NANO + nano))
   USAGE_TOTAL_PREMIUM=$((USAGE_TOTAL_PREMIUM + premium))
-  USAGE_BREAKDOWN="${USAGE_BREAKDOWN}${label}	${nano}	${premium}
+  USAGE_TOTAL_USD="$(awk -v a="$USAGE_TOTAL_USD" -v b="$usd" 'BEGIN { printf "%.6f", a + b }')"
+  USAGE_BREAKDOWN="${USAGE_BREAKDOWN}${label}	${nano}	${premium}	${usd}
 "
 }
 
@@ -130,24 +130,45 @@ usage_credits() {
 # not one decision: a second opinion, a repair round, and a re-review are each
 # something the developer can switch off in config, and a lump sum tells them
 # which of those to reach for -- none.
+#
+# Nano-AIU (Copilot) and USD (Claude Code, Hermes) are reported in whichever
+# unit is actually non-zero -- converting between them would be inventing an
+# exchange rate no CLI ever claimed.
 print_usage_summary() {
   [ "$USAGE_RUNS" -gt 0 ] || return 0
 
   say ""
-  say "  Cost            : $(usage_credits "$USAGE_TOTAL_NANO") AI credits across $USAGE_RUNS agent run(s)"
+  if [ "$USAGE_TOTAL_NANO" -gt 0 ]; then
+    say "  Cost            : $(usage_credits "$USAGE_TOTAL_NANO") AI credits across $USAGE_RUNS agent run(s)"
+  else
+    say "  Cost            : \$$(printf '%.4f' "$USAGE_TOTAL_USD") across $USAGE_RUNS agent run(s)"
+  fi
   [ "$USAGE_TOTAL_PREMIUM" -gt 0 ] &&
     say "                    $USAGE_TOTAL_PREMIUM premium request(s)"
 
-  printf '%s' "$USAGE_BREAKDOWN" | awk -F'\t' -v per="$NANO_PER_AI_CREDIT" '
-    NF < 2 { next }
-    { n[$1] += $2; c[$1]++; if (!($1 in seen)) { seen[$1]=1; order[++k]=$1 } }
-    END {
-      for (i = 1; i <= k; i++) {
-        label = order[i]
-        suffix = (c[label] > 1) ? sprintf("  (x%d)", c[label]) : ""
-        printf "                    %-16s %7.3f%s\n", label, n[label] / per, suffix
-      }
-    }'
+  if [ "$USAGE_TOTAL_NANO" -gt 0 ]; then
+    printf '%b' "$USAGE_BREAKDOWN" | awk -F'	' -v per="$NANO_PER_AI_CREDIT" '
+      NF < 3 { next }
+      { n[$1] += $2; c[$1]++; if (!($1 in seen)) { seen[$1]=1; order[++k]=$1 } }
+      END {
+        for (i = 1; i <= k; i++) {
+          label = order[i]
+          suffix = (c[label] > 1) ? sprintf("  (x%d)", c[label]) : ""
+          printf "                    %-16s %7.3f%s\n", label, n[label] / per, suffix
+        }
+      }'
+  else
+    printf '%b' "$USAGE_BREAKDOWN" | awk -F'	' '
+      NF < 4 { next }
+      { n[$1] += $4; c[$1]++; if (!($1 in seen)) { seen[$1]=1; order[++k]=$1 } }
+      END {
+        for (i = 1; i <= k; i++) {
+          label = order[i]
+          suffix = (c[label] > 1) ? sprintf("  (x%d)", c[label]) : ""
+          printf "                    %-16s $%6.4f%s\n", label, n[label], suffix
+        }
+      }'
+  fi
 
   # An unpriced run is reported as unpriced. Printing the partial total as if it
   # were the whole would understate the bill, which is the one direction a cost
@@ -169,12 +190,11 @@ print_usage_summary() {
 #   - there is no timeout. The developer decides when it is finished.
 run_explain_session() {
   local prompt="$1"
-  MODEL_FLAG=()
-  [ -n "${INHOUSECODE_EXPLAIN_MODEL:-}" ] && MODEL_FLAG=(--model "$INHOUSECODE_EXPLAIN_MODEL")
+  local model=""
+  [ -n "${INHOUSECODE_EXPLAIN_MODEL:-}" ] && model="$INHOUSECODE_EXPLAIN_MODEL"
 
-  "$COPILOT_PATH" -i "$prompt" "${MODEL_FLAG[@]+"${MODEL_FLAG[@]}"}" \
-    "${EXPLAIN_PERMISSIONS[@]}" < /dev/tty > /dev/tty 2>&1
-  EXPLAIN_RC=$?
+  harness_explain_cmd "$prompt" "$model"
+  EXPLAIN_RC="$HARNESS_RC"
   if [ "$EXPLAIN_RC" -ne 0 ]; then
     warn "inhousecode: the explain session exited with status $EXPLAIN_RC."
   fi
@@ -182,29 +202,19 @@ run_explain_session() {
 }
 
 ensure_copilot() {
-  COPILOT_PATH="$(resolve_copilot)" || {
-    fail "inhousecode: Copilot CLI was not found. Install it: https://github.com/github/copilot-cli"
-    return 1
-  }
-  resolve_timeout || {
-    fail "inhousecode: GNU timeout (or gtimeout) is required to bound agent runs."
-    return 1
-  }
+  ensure_harness
 }
 
 # run_review_agent <prompt> <log-path>
 # Sets REVIEW_OUTPUT and REVIEW_RC.
 run_review_agent() {
   local prompt="$1" log="$2"
-  local quiet=(--silent)
-  [ "${INHOUSECODE_VERBOSE:-0}" = "1" ] && quiet=()
-  copilot_model_flag
-  agent_output_format
+  local model=""
+  [ -n "${INHOUSECODE_AI_MODEL:-}" ] && model="$INHOUSECODE_AI_MODEL"
 
-  "$TIMEOUT_BIN" "$INHOUSECODE_AI_TIMEOUT_SEC" "$COPILOT_PATH" -p "$prompt" \
-    "${MODEL_FLAG[@]+"${MODEL_FLAG[@]}"}" "${quiet[@]+"${quiet[@]}"}" "${REVIEW_PERMISSIONS[@]}" \
-    "${AGENT_OUTPUT_FORMAT[@]+"${AGENT_OUTPUT_FORMAT[@]}"}" --no-color > "$log" 2>&1 < /dev/null
-  REVIEW_RC=$?
+  harness_review_cmd "$prompt" "$log" "$INHOUSECODE_AI_TIMEOUT_SEC" \
+    "$model" "${INHOUSECODE_VERBOSE:-0}"
+  REVIEW_RC="$HARNESS_RC"
   usage_record "review" "$log"
   REVIEW_OUTPUT="$(strip_cr "$(agent_text "$log")")" || { REVIEW_RC=1; REVIEW_OUTPUT=""; }
 }
@@ -218,16 +228,12 @@ run_review_agent() {
 # value of a rubber duck is that it did not already believe the conclusion.
 run_critique_agent() {
   local prompt="$1" log="$2"
-  local quiet=(--silent)
-  [ "${INHOUSECODE_VERBOSE:-0}" = "1" ] && quiet=()
-  local model=()
-  [ -n "${INHOUSECODE_AI_CRITIQUE_MODEL:-}" ] && model=(--model "$INHOUSECODE_AI_CRITIQUE_MODEL")
-  agent_output_format
+  local model=""
+  [ -n "${INHOUSECODE_AI_CRITIQUE_MODEL:-}" ] && model="$INHOUSECODE_AI_CRITIQUE_MODEL"
 
-  "$TIMEOUT_BIN" "$INHOUSECODE_AI_TIMEOUT_SEC" "$COPILOT_PATH" -p "$prompt" \
-    "${model[@]+"${model[@]}"}" "${quiet[@]+"${quiet[@]}"}" "${REVIEW_PERMISSIONS[@]}" \
-    "${AGENT_OUTPUT_FORMAT[@]+"${AGENT_OUTPUT_FORMAT[@]}"}" --no-color > "$log" 2>&1 < /dev/null
-  CRITIQUE_RC=$?
+  harness_review_cmd "$prompt" "$log" "$INHOUSECODE_AI_TIMEOUT_SEC" \
+    "$model" "${INHOUSECODE_VERBOSE:-0}"
+  CRITIQUE_RC="$HARNESS_RC"
   usage_record "second opinion" "$log"
   CRITIQUE_OUTPUT="$(strip_cr "$(agent_text "$log")")" ||
     { CRITIQUE_RC=1; CRITIQUE_OUTPUT=""; }
@@ -239,19 +245,51 @@ run_critique_agent() {
 run_fix_agent() {
   local prompt="$1" log="$2" label="${3:-repair}"
   local budget=$((INHOUSECODE_AI_TIMEOUT_SEC * FIX_AGENT_TIMEOUT_MULTIPLIER))
-  local quiet=(--silent)
-  [ "${INHOUSECODE_VERBOSE:-0}" = "1" ] && quiet=()
-  copilot_model_flag
-  agent_output_format
+  local model=""
+  [ -n "${INHOUSECODE_AI_MODEL:-}" ] && model="$INHOUSECODE_AI_MODEL"
 
-  "$TIMEOUT_BIN" "$budget" "$COPILOT_PATH" -p "$prompt" \
-    "${MODEL_FLAG[@]+"${MODEL_FLAG[@]}"}" "${quiet[@]+"${quiet[@]}"}" "${FIX_PERMISSIONS[@]}" \
-    "${AGENT_OUTPUT_FORMAT[@]+"${AGENT_OUTPUT_FORMAT[@]}"}" --no-color > "$log" 2>&1 < /dev/null
-  FIX_RC=$?
+  harness_fix_cmd "$prompt" "$log" "$budget" "$model" "${INHOUSECODE_VERBOSE:-0}"
+  FIX_RC="$HARNESS_RC"
   usage_record "$label" "$log"
   if [ "$FIX_RC" -ne 0 ]; then
     warn "inhousecode: the fix agent exited with status $FIX_RC (log: $log)"
   fi
+}
+
+# run_discover_agent <prompt> <log-path>
+# Sets DISCOVER_RC. Used only by `inhousecode discover`: read + shell, no
+# file-edit tool. It may call `inhousecode memory candidate add`, but it cannot
+# edit repository files or call OpenViking directly.
+run_discover_agent() {
+  local prompt="$1" log="$2" label="${3:-discover}"
+  local budget=$((INHOUSECODE_AI_TIMEOUT_SEC * FIX_AGENT_TIMEOUT_MULTIPLIER))
+  local model=""
+  [ -n "${INHOUSECODE_AI_MODEL:-}" ] && model="$INHOUSECODE_AI_MODEL"
+
+  harness_discover_cmd "$prompt" "$log" "$budget" "$model" "${INHOUSECODE_VERBOSE:-0}"
+  DISCOVER_RC="$HARNESS_RC"
+  usage_record "$label" "$log"
+  if [ "$DISCOVER_RC" -ne 0 ]; then
+    warn "inhousecode: the discovery agent exited with status $DISCOVER_RC (log: $log)"
+  fi
+}
+
+# run_draft_agent <prompt> <log-path>
+# Sets DRAFT_OUTPUT and DRAFT_RC. A short, read-only, headless call used to
+# turn a developer's terse "we don't do that here" into one well-formed team
+# memory line. It cannot write anything: the human approves the draft and the
+# memory policy performs the only write. Deliberately reuses the read-only review
+# shape so a drafting call has no more power than a review does.
+run_draft_agent() {
+  local prompt="$1" log="$2"
+  local model=""
+  [ -n "${INHOUSECODE_AI_MODEL:-}" ] && model="$INHOUSECODE_AI_MODEL"
+
+  harness_review_cmd "$prompt" "$log" "$INHOUSECODE_AI_TIMEOUT_SEC" \
+    "$model" "${INHOUSECODE_VERBOSE:-0}"
+  DRAFT_RC="$HARNESS_RC"
+  usage_record "memory draft" "$log"
+  DRAFT_OUTPUT="$(strip_cr "$(agent_text "$log")")" || { DRAFT_RC=1; DRAFT_OUTPUT=""; }
 }
 
 # The standard of craft demanded of any agent that touches this repository's
@@ -274,9 +312,9 @@ Monday - not like a linter applying patches.
 Respect the repository, not just the finding:
 - Read the surrounding code first. Understand why it is shaped the way it is.
 - Follow this repository's own conventions and guidelines: AGENTS.md,
-  CONTRIBUTING, .github/copilot-instructions.md, the team rulebook, and the
-  style already visible in the files you are editing. When house style and your
-  own preference disagree, house style wins.
+  CONTRIBUTING, .github/copilot-instructions.md, approved review knowledge
+  supplied with the finding, and the style already visible in the files you are
+  editing. When house style and your own preference disagree, house style wins.
 - Match the existing naming, error handling, logging, and structure. A fix that
   reads like it was always there is worth more than a clever one.
 - Leave the code better than a patch would: correct, readable, and explained

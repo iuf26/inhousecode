@@ -47,24 +47,15 @@ other two genuinely wins.
 
 The name is the whole pitch, compressed.
 
-**In-house** because the rules the reviewer enforces are *yours* — declared
-by your team, in a file your team owns, checked into your repo alongside the
-code they govern. Not a vendor's opinion of good code. Yours.
+**In-house** because the knowledge the reviewer enforces is *yours* — recorded
+by your team, scoped to a project or shared globally, and promoted only under
+your policy. Not a vendor's opinion of good code. Yours.
 
-Practically, that's one markdown file:
-`.inhousecode/developer-rulebook.md`. One line per rule, plain language, no
-schema to fight:
-
-```markdown
-- tenant-scoped-queries (sql) — every query filters by tenant_id
-- no-print-logging (python) — use logging, not print(), in library code
-```
-
-The reviewer re-reads this file on every single run and cites the rule by
-name against every finding. Write a comment once, and it stops needing a
-human to say it again. That's the entire long-term payoff: the team's
-accumulated judgment stops living in people's memory and starts living in a
-file that a machine actually enforces.
+OpenViking is the persistent store. A comment starts as candidate memory with
+provenance and evidence. inhousecode validates its scope, risk, lifecycle, and
+approval before it can become active project or global knowledge. Each review
+gets one frozen snapshot with record URIs and a hash, so the reviewer can cite
+what informed it without silently changing policy mid-run.
 
 ## How it actually works, briefly
 
@@ -76,10 +67,8 @@ Two phases, in order, and they are not interchangeable:
    deserialization). This is the check a hallucinating reviewer can't talk
    its way around, because it isn't a reviewer at all.
 2. **An AI review that knows your team.** Once the floor holds, an AI
-   reviewer reads the PR description, the diff, and your rulebook, and
-   reports findings against rules it can quote back to you verbatim — not
-   "this looks off," but "this violates `tenant-scoped-queries`, here's the
-   line, here's the fix."
+   reviewer reads the PR description, the diff, and a frozen snapshot of your
+   governed knowledge, then reports the exact line, rule provenance, and fix.
 
 Findings split by how much judgment they require. Critical and high-severity
 issues get fixed automatically and re-checked — they're not opinions, so
@@ -100,8 +89,9 @@ generating — whichever point you'd rather catch things.
   dashboard, nothing runs on *inhousecode's* servers; the tool is a checkout on
   your machine (or CI runner), not a service you send code to. That's a
   narrower claim than "your code never leaves the machine": Phase 2 still calls
-  out to Copilot CLI's models, and the second opinion calls a different model
-  again, the same way any AI reviewer would. What inhousecode adds is a
+  out to your configured AI CLI's models — Copilot, Claude Code, Codex, or Hermes —
+  and the second opinion calls a different model again, the same way any AI
+  reviewer would. What inhousecode adds is a
   deterministic floor that runs before any of that, and a pipeline you can
   read, fork, or swap pieces out of — not an on-machine guarantee for the AI
   phase. (A [managed cloud version](business-case.md#self-hosted-or-managed)
@@ -117,10 +107,9 @@ generating — whichever point you'd rather catch things.
 Day one: a static and AI check that catches the obvious stuff, wired into
 your commit flow with essentially no setup.
 
-Six months in, if the rulebook gets used: a reviewer that has absorbed every
-rule your team has ever bothered to write down, that never forgets one, and
-that applies all of them, every time, to every diff — including the ones
-written at 11pm by an agent nobody was watching closely.
+Six months in, if governed knowledge gets used: a reviewer that applies the
+approved lessons your team has preserved, keeps project and global scope
+separate, and can trace each applied rule to its source and evidence.
 
 ---
 

@@ -17,6 +17,9 @@ AI_STATUS="not-run"
 AI_OUTPUT=""
 AI_ERROR=""
 AI_FIX_ROUNDS=0
+# The first review's report, before any repair. Compared with the final report
+# so the review's OpenViking session can say what was flagged and then fixed.
+AI_INITIAL_OUTPUT=""
 # Counts developer-driven triage rounds, so "fix, see what that surfaced, fix
 # again" stays bounded by the same budget as automatic repair.
 AI_PICK_ROUNDS=0
@@ -59,14 +62,37 @@ ai_write_inputs() {
 ai_write_intent_brief() {
   AI_INTENT_PATH=""
   [ "${INHOUSECODE_AI_VERIFY_INTENT:-1}" = "1" ] || return 0
-  [ -n "${PR_BODY:-}" ] || return 0
 
-  local intent_path="$INHOUSECODE_CACHE_ROOT/pr-description.md"
-  {
-    printf '# PR #%s: %s\n\n' "${PR_ID:-?}" "${PR_TITLE:-untitled}"
-    printf '%s\n' "$PR_BODY"
-  } > "$intent_path" 2>/dev/null || return 0
-  [ -s "$intent_path" ] && AI_INTENT_PATH="$intent_path"
+  # The intent brief is assembled from every source the caller supplied: the PR
+  # description, a ticket, and/or a free-form intent file. Any that is missing
+  # or unfetchable is simply dropped -- optional inputs never block and never
+  # bluff (they are evidence, not gates). If none is present, there is no brief.
+  local intent_path="$INHOUSECODE_CACHE_ROOT/intent-brief.md"
+  local wrote=0
+  : > "$intent_path" 2>/dev/null || return 0
+
+  if [ -n "${PR_BODY:-}" ]; then
+    {
+      printf '## PR #%s: %s\n\n' "${PR_ID:-?}" "${PR_TITLE:-untitled}"
+      printf '%s\n\n' "$PR_BODY"
+    } >> "$intent_path" 2>/dev/null && wrote=1
+  fi
+
+  if [ -n "${TICKET_BODY:-}" ]; then
+    {
+      printf '## Ticket %s: %s\n\n' "${TICKET_ID:-?}" "${TICKET_TITLE:-untitled}"
+      printf '%s\n\n' "$TICKET_BODY"
+    } >> "$intent_path" 2>/dev/null && wrote=1
+  fi
+
+  if [ -n "${INTENT_FILE_BODY:-}" ]; then
+    {
+      printf '## Stated intent\n\n'
+      printf '%s\n\n' "$INTENT_FILE_BODY"
+    } >> "$intent_path" 2>/dev/null && wrote=1
+  fi
+
+  [ "$wrote" = "1" ] && [ -s "$intent_path" ] && AI_INTENT_PATH="$intent_path"
   return 0
 }
 
@@ -126,10 +152,10 @@ ai_resolve_source_root() {
 ai_build_prompt() {
   local skill="$INHOUSECODE_HOME/skills/code-review/SKILL.md"
   local checklist="$INHOUSECODE_HOME/skills/code-review/references/code-review-checklist.md"
-  local rulebook="$REPO_ROOT/$INHOUSECODE_RULEBOOK"
-  local rulebook_line="Team rulebook: this repository has none. Judge against the criteria below only."
-  [ -f "$rulebook" ] &&
-    rulebook_line="Team rulebook (AUTHORITATIVE - read it in full and check every active guideline): $rulebook"
+  local memory_line=""
+  command -v memory_prompt_block >/dev/null 2>&1 &&
+    memory_line="
+$(memory_prompt_block)"
 
   local contract
   contract="$(ai_output_contract)"
@@ -145,18 +171,20 @@ whole, as a human reviewer approving or rejecting it would."
   # told the Semgrep findings are already gone.
   local semgrep_line="Semgrep already ran over this change and its findings were resolved. Do not
 re-report mechanically detectable lint or pattern matches; report what a tool
-cannot see: intent, correctness, contracts, and the team rulebook."
+cannot see: intent, correctness, contracts, and approved review knowledge."
   [ "${INHOUSECODE_STATIC_AUTOFIX:-0}" = "1" ] ||
     semgrep_line="Semgrep already ran over this change and its findings were reported separately.
 Do not re-report mechanically detectable lint or pattern matches; report what a
-tool cannot see: intent, correctness, contracts, and the team rulebook."
+tool cannot see: intent, correctness, contracts, and approved review knowledge."
 
   local critique="$INHOUSECODE_HOME/skills/code-review/references/finding-critique.md"
+  local principles="$INHOUSECODE_HOME/skills/code-review/references/engineering-principles.md"
   local reference_line="Reference material, richer detail on the same method. Read it if you can;
 if a read is denied or the file is missing, continue without it - the criteria
 above are sufficient and the output contract still applies:
 - $skill
 - $checklist
+- $principles
 - $critique"
 
   local commits_line=""
@@ -167,7 +195,7 @@ above are sufficient and the output contract still applies:
   local intent_line=""
   [ -n "${AI_INTENT_PATH:-}" ] &&
     intent_line="
-- Pull-request description, what the author says this delivers: $AI_INTENT_PATH"
+- Intent brief, what this change is supposed to deliver (from the PR, the ticket, and/or a stated-intent file): $AI_INTENT_PATH"
 
   local impact_line=""
   [ -n "${AI_IMPACT_PATH:-}" ] &&
@@ -188,7 +216,7 @@ contents of every file listed below.
 Review source: path review of '$TARGET_PATH'
 In-scope files (read this file for the list): $INHOUSECODE_CACHE_ROOT/scan-files.txt
 Repository root: $REPO_ROOT
-$rulebook_line
+$memory_line
 
 $reference_line
 
@@ -204,7 +232,7 @@ Read only these inputs:
 - Diff: $AI_DIFF_PATH
 - In-scope files (read this file for the list): $INHOUSECODE_CACHE_ROOT/scan-files.txt
 - Reviewed source root: ${AI_SOURCE_ROOT:-$REPO_ROOT}$commits_line$intent_line$impact_line
-$rulebook_line
+$memory_line
 
 Paths inside the reviewed source root are repository-relative. Report every
 finding with its repository-relative path, never an absolute one.
@@ -232,17 +260,19 @@ $contract"
 ai_intent_task() {
   cat <<'EOF'
 
-VERIFY THE CHANGE AGAINST ITS OWN DESCRIPTION
-The pull-request description is the author's specification. Before you judge the
-code, turn it into a checklist and complete it.
+VERIFY THE CHANGE AGAINST ITS STATED INTENT
+The intent brief is the author's specification -- assembled from the pull-request
+description, the linked ticket, and/or a stated-intent file, whichever were
+supplied. Before you judge the code, turn it into a checklist and complete it.
 
-1. Extract every checkable claim the description makes about THIS change: each
+1. Extract every checkable claim the brief makes about THIS change: each
    promised behavior, fix, migration, config key, guarantee, and removal. A
    claim is checkable when you could point at code and say "there it is, or it
-   is not there".
+   is not there". A claim may come from the PR or the ticket; treat both as the
+   specification this change is meant to satisfy.
 2. Ignore everything that is not a claim about this change: background,
    motivation, rollout notes, screenshots, review instructions, and any work the
-   description explicitly assigns to another PR in a series ("part 2 will...",
+   brief explicitly assigns to another PR in a series ("part 2 will...",
    "follow-up", "tracked separately"). Judging a stacked PR against its
    siblings' promises produces nothing but false failures.
 3. For each surviving claim, find the code that delivers it and decide:
@@ -331,8 +361,9 @@ ai_claim_contract() {
   [ -n "${AI_INTENT_PATH:-}" ] || return 0
   cat <<EOF
 INTENT CHECKLIST LINES - ALSO REQUIRED
-Emit one line per claim you extracted from the pull-request description, in this
-exact shape, with real TAB characters between the four fields:
+Emit one line per claim you extracted from the intent brief (the PR description
+and/or the ticket), in this exact shape, with real TAB characters between the
+four fields:
 
 $AI_CLAIM_MARKER<TAB>STATUS<TAB>the claim, in your own words<TAB>evidence
 
@@ -354,19 +385,13 @@ EOF
 ai_output_contract() {
   cat <<EOF
 SEVERITY RUBRIC
-  CRITICAL  exploitable vulnerability, data loss, or corruption. Never a
-            rulebook rule's severity - a rule tops out at HIGH.
-  HIGH      a bug that will surface in production, or a rulebook guideline
-            violated at its default severity (no marker, or explicit (HIGH)).
+  CRITICAL  exploitable vulnerability, data loss, or corruption.
+  HIGH      a bug that will surface in production.
   MEDIUM    a real weakness: missing validation, a poor contract, an
-            unmeaningful test, a performance trap, or a rulebook guideline
-            marked (MEDIUM).
-  LOW       polish. Naming, clarity, small idiom issues, or a rulebook
-            guideline marked (LOW).
+            unmeaningful test, or a performance trap.
+  LOW       polish. Naming, clarity, or small idiom issues.
 CRITICAL and HIGH are blocking. MEDIUM and LOW are not, and must never be
-promoted to blocking. Formatting and style never exceed MEDIUM. A rulebook
-rule's own marker sets its severity - use exactly what the rule declares,
-never upgrade or downgrade it.
+promoted to blocking. Formatting and style never exceed MEDIUM.
 
 OUTPUT CONTRACT - THIS IS NOT OPTIONAL
 Emit one line per finding, in this exact shape, with real TAB characters
@@ -375,8 +400,11 @@ between the five fields and nothing else on the line:
 $AI_FINDING_MARKER<TAB>SEVERITY<TAB>file:line<TAB>category<TAB>one-line fix
 
   SEVERITY   exactly one of CRITICAL, HIGH, MEDIUM, LOW
-  file:line  repository-relative path and the line number
-  category   two or three words, or the rulebook rule id it violates
+  file:line  repository-relative path and the exact executable or configuration
+             statement that demonstrates the defect. Before emitting it, reread
+             that line and verify the line itself contains the code described:
+             not a function declaration, blank line, comment, or nearby context.
+  category   two or three words, or the stable approved memory record id
   fix        one imperative sentence, on a single line
 
 $(ai_claim_contract)
@@ -418,14 +446,13 @@ EOF
 # model invents a third set of findings nobody asked for.
 ai_critique_prompt() {
   local reference="$INHOUSECODE_HOME/skills/code-review/references/finding-critique.md"
-  local rulebook="$REPO_ROOT/$INHOUSECODE_RULEBOOK"
-  local rulebook_line="Team rulebook: this repository has none."
-  [ -f "$rulebook" ] && rulebook_line="Team rulebook (what the findings were judged against): $rulebook"
   local source_line="Reviewed source root: ${AI_SOURCE_ROOT:-$REPO_ROOT}"
   [ "$TARGET_MODE" = "path" ] && source_line="Repository root: $REPO_ROOT"
   local diff_line=""
   [ -n "${AI_DIFF_PATH:-}" ] && diff_line="
 - The change under review: $AI_DIFF_PATH"
+  local memory_line=""
+  command -v memory_prompt_block >/dev/null 2>&1 && memory_line="$(memory_prompt_block)"
 
   cat <<EOF
 You are a second reviewer giving an independent opinion on ANOTHER reviewer's
@@ -434,7 +461,7 @@ precisely that you do not already believe them.
 
 $source_line$diff_line
 - In-scope files (read this file for the list): $INHOUSECODE_CACHE_ROOT/scan-files.txt
-$rulebook_line
+$memory_line
 
 Reference material, the method in full. Read it if you can; if the read is
 denied or the file is missing, continue without it - the instructions below are
@@ -482,7 +509,7 @@ The original reviewer will correct these; you must not rewrite them yourself.
                 direction, and the correct one is not simply lower.
   UNPROVEN      the mechanism is asserted rather than demonstrated, but the
                 concern may well be real once properly grounded.
-  MISCATEGORIZED the category or rulebook rule id does not match the defect.
+  MISCATEGORIZED the category or approved memory record id does not match the defect.
   DUPLICATE     two findings describe one defect; say which is the origin.
   VAGUE-FIX     the fix is not a specific, imperative, single action.
 
@@ -533,6 +560,8 @@ ai_revision_prompt() {
   local diff_line=""
   [ -n "${AI_DIFF_PATH:-}" ] && diff_line="
 - The change under review: $AI_DIFF_PATH"
+  local memory_line=""
+  command -v memory_prompt_block >/dev/null 2>&1 && memory_line="$(memory_prompt_block)"
 
   cat <<EOF
 You are the senior code reviewer who produced the report below. A second
@@ -542,6 +571,7 @@ rewrite them, because that is your report to correct.
 
 $source_line$diff_line
 - In-scope files (read this file for the list): $INHOUSECODE_CACHE_ROOT/scan-files.txt
+$memory_line
 
 For each correction below, go back to the code and do exactly one of:
 - restate the finding correctly - the right line, severity, category, or a
@@ -620,6 +650,17 @@ ai_review_once() {
   AI_OUTPUT="$REVIEW_OUTPUT"
   ai_classify
   ai_critique_loop
+}
+
+# Keep the original review mode for every post-repair verdict. An adversarial
+# finding may be invisible to the ordinary reviewer, so changing modes here
+# would approve edits that the selected lenses never checked.
+ai_review_current_mode() {
+  if [ "${INHOUSECODE_ADVERSARIAL_ENABLED:-0}" = "1" ]; then
+    run_adversarial_review
+  else
+    ai_review_once
+  fi
 }
 
 # --- the second opinion -------------------------------------------------------
@@ -774,26 +815,66 @@ ai_fix_round() {
 
 # Repair only what blocks, then re-review to confirm the repair actually landed.
 ai_autofix_blocking() {
-  local blocking
+  local blocking previous_blocking=-1 fix_completed
   while :; do
     blocking="$(count_findings "$AI_OUTPUT" "$AI_FINDING_MARKER" blocking)"
     [ "$blocking" -eq 0 ] && break
     [ "$INHOUSECODE_AI_AUTOFIX_BLOCKING" = "1" ] || break
+    if [ "$previous_blocking" -ne -1 ] && [ "$blocking" -ge "$previous_blocking" ]; then
+      warn "inhousecode: the last AI repair round made no progress ($blocking blocking finding(s) left); stopping the loop."
+      break
+    fi
     [ "$AI_FIX_ROUNDS" -ge "$INHOUSECODE_AI_MAX_FIX_LOOPS" ] && {
       warn "inhousecode: reached the review repair budget with $blocking blocking finding(s) left."
       break
     }
+    previous_blocking="$blocking"
     AI_FIX_ROUNDS=$((AI_FIX_ROUNDS + 1))
     info "Review repair round $AI_FIX_ROUNDS/$INHOUSECODE_AI_MAX_FIX_LOOPS - $blocking blocking finding(s)."
+    fix_completed=1
     ai_fix_round blocking \
-      "Resolve these blocking code-review findings in the repository at $REPO_ROOT." || break
+      "Resolve these blocking code-review findings in the repository at $REPO_ROOT." || fix_completed=0
     [ "$TARGET_MODE" = "staged" ] && static_restage
-    ai_write_inputs || break
-    ai_review_once
+    ai_write_inputs || { AI_STATUS="unavailable"; AI_ERROR="could not refresh review inputs after repair"; break; }
+    ai_review_current_mode
     print_claims_report "$AI_OUTPUT"
     print_findings_report "AI review (after repair round $AI_FIX_ROUNDS)" \
       "$AI_OUTPUT" "$AI_FINDING_MARKER" "$AI_VERDICT_PREFIX"
     [ "$AI_STATUS" = "unavailable" ] && break
+    [ "$fix_completed" -eq 1 ] || break
+  done
+}
+
+# An explicit --fix or review.fixByDefault opt-in repairs every finding, not
+# only blocking ones. Every bounded round is followed by a fresh review.
+ai_autofix_all() {
+  local total previous_total=-1 fix_completed
+  while :; do
+    total="$(count_findings "$AI_OUTPUT" "$AI_FINDING_MARKER" all)"
+    [ "$total" -eq 0 ] && break
+    [ "${INHOUSECODE_FIX_ALL:-0}" = "1" ] || break
+    if [ "$previous_total" -ne -1 ] && [ "$total" -ge "$previous_total" ]; then
+      warn "inhousecode: the last AI repair round made no progress ($total finding(s) left); stopping the loop."
+      break
+    fi
+    [ "$AI_FIX_ROUNDS" -ge "$INHOUSECODE_AI_MAX_FIX_LOOPS" ] && {
+      warn "inhousecode: reached the review repair budget with $total finding(s) left."
+      break
+    }
+    previous_total="$total"
+    AI_FIX_ROUNDS=$((AI_FIX_ROUNDS + 1))
+    info "Review repair round $AI_FIX_ROUNDS/$INHOUSECODE_AI_MAX_FIX_LOOPS - $total finding(s)."
+    fix_completed=1
+    ai_fix_round all \
+      "Resolve every code-review finding in the repository at $REPO_ROOT." || fix_completed=0
+    [ "$TARGET_MODE" = "staged" ] && static_restage
+    ai_write_inputs || { AI_STATUS="unavailable"; AI_ERROR="could not refresh review inputs after repair"; break; }
+    ai_review_current_mode
+    print_claims_report "$AI_OUTPUT"
+    print_findings_report "AI review (after repair round $AI_FIX_ROUNDS)" \
+      "$AI_OUTPUT" "$AI_FINDING_MARKER" "$AI_VERDICT_PREFIX"
+    [ "$AI_STATUS" = "unavailable" ] && break
+    [ "$fix_completed" -eq 1 ] || break
   done
 }
 
@@ -887,8 +968,8 @@ ai_triage_findings() {
   # for explain sessions. Skipping it saves nothing either -- the only way to
   # learn the truth would be re-running, and that costs both phases instead of
   # one review.
-  ai_write_inputs || return 0
-  ai_review_once
+  ai_write_inputs || { AI_STATUS="unavailable"; AI_ERROR="could not refresh review inputs after repair"; return 0; }
+  ai_review_current_mode
   print_claims_report "$AI_OUTPUT"
   print_findings_report "AI review (after your fixes)" "$AI_OUTPUT" \
     "$AI_FINDING_MARKER" "$AI_VERDICT_PREFIX"
@@ -914,16 +995,27 @@ run_ai_gate() {
     return 0
   fi
   step "Phase 2/2 - AI code review"
-  ensure_copilot || { AI_STATUS="unavailable"; AI_ERROR="Copilot CLI is unavailable"; return 1; }
+  ensure_copilot || { AI_STATUS="unavailable"; AI_ERROR="the review harness is unavailable"; return 1; }
   ai_write_inputs || { AI_STATUS="unavailable"; return 1; }
 
-  ai_review_once
+  AI_REVIEW_ID="${PR_ID:+pr-$PR_ID}"
+  [ -n "$AI_REVIEW_ID" ] ||
+    AI_REVIEW_ID="${TARGET_MODE}-$(git rev-parse --short HEAD 2>/dev/null || printf unknown)-$$"
+  memory_resolve_review_snapshot "$AI_REVIEW_ID" "$TARGET_MODE" \
+    "$INHOUSECODE_CACHE_ROOT/scan-files.txt" "${AI_DIFF_PATH:-}" || true
+
+  ai_review_current_mode
   print_claims_report "$AI_OUTPUT"
   print_findings_report "AI review" "$AI_OUTPUT" \
     "$AI_FINDING_MARKER" "$AI_VERDICT_PREFIX"
+  AI_INITIAL_OUTPUT="$AI_OUTPUT"
   [ "$AI_STATUS" = "unavailable" ] && return 1
 
-  ai_autofix_blocking
-  ai_triage_findings
+  if [ "${INHOUSECODE_FIX_ALL:-0}" = "1" ]; then
+    ai_autofix_all
+  else
+    ai_autofix_blocking
+    ai_triage_findings
+  fi
   return 0
 }

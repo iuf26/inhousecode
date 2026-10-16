@@ -11,11 +11,13 @@ the config file is the source of truth if they drift apart.*
 - [The pipeline](#the-pipeline)
 - [The finding contract](#the-finding-contract)
 - [The critique pass](#the-critique-pass) · [second opinion](#the-second-opinion)
+- [Adversarial review](#adversarial-review)
 - [Trust boundaries](#trust-boundaries)
 - [The explain handoff](#the-explain-handoff)
 - [Target modes](#target-modes)
 - [Judging a change against what it promised](#judging-a-change-against-what-it-promised)
 - [The repair loops](#the-repair-loops)
+- [Team memory](#team-memory)
 - [The standard of craft](#the-standard-of-craft)
 - [What the run cost](#what-the-run-cost)
 - [Layout](#layout)
@@ -149,6 +151,58 @@ only once the code has been read and disproved it; a file the critic could not
 open leaves the finding CONFIRMED, so a critic that cannot see the source can
 never empty the report into a clean verdict.
 
+## Adversarial review
+
+The critique pass and second opinion make the *fast* gate trustworthy: one
+reviewer, biased toward dropping findings, so a per-commit gate never cries
+wolf. Adversarial review is the opposite posture, offered as a separate opt-in
+mode (`--adversarial`, or `adversarial.enabled`) for a pull request as a whole.
+
+Where the fast gate subtracts, the lenses **add**. Several reviewers each judge
+the change from one angle — Skeptic (correctness, idempotency, shared state),
+Architect (boundaries, dual-path debt), Minimalist (dead weight, needless
+complexity), and conditionally Operator (safe deployment, bounded resources,
+observability, compatibility, and rollback) — and each is told to attack, not
+to validate. The number of lenses is sized to the change (1/2/3 for
+small/medium/large), with Operator added when changed paths or diff semantics
+indicate production risk, capped by `adversarial.maxLenses`. They run in
+parallel.
+
+```mermaid
+flowchart TD
+    D["diff + intent brief"] --> L1["Skeptic lens"]
+    D --> L2["Architect lens"]
+    D --> L3["Minimalist lens"]
+    L1 --> S["synthesis + lead judgment<br/>(subtractive)"]
+    L2 --> S
+    L3 --> S
+    S --> V["findings + verdict<br/>(standard contract)"]
+```
+
+Two design choices matter:
+
+- **Same harness, different model.** The lenses run on `adversarial.model` — a
+  different model than the primary review, on the *same* harness the team
+  configured at install. The adversarial gap comes from a model that never saw
+  the primary reviewer's reasoning plus the distinct lens prompts, without
+  forcing a team to install a second AI CLI. With no model configured, the
+  lenses fall back to the primary review model.
+- **The synthesis only subtracts.** Each lens emits the normalized
+  `##CR-FINDING##` contract; a final synthesis pass merges, deduplicates, and
+  renders a lead judgment, but — exactly like the second opinion — it may only
+  drop or downgrade a finding, never invent one or raise a severity. A finding no
+  lens raised would reach the developer critiqued by nobody. So the additive
+  lenses are bounded by a subtractive judge, and the output is the same finding
+  table, picker, and verdict the fast gate produces.
+
+Implemented in `lib/gate_adversarial.sh`; `run_ai_gate` dispatches to it when
+adversarial mode is on, in place of the single `ai_review_once`. Each lens is one
+model run and the synthesis one more, itemized separately in the cost summary —
+which is why the mode is opt-in and aimed at whole PRs. The lenses read the
+shipped engineering principles
+(`skills/code-review/references/engineering-principles.md`) and the method lives
+in the [adversarial-review skill](../skills/adversarial-review/SKILL.md).
+
 ## Trust boundaries
 
 | Actor | Permissions | Rationale |
@@ -156,6 +210,7 @@ never empty the report into a clean verdict.
 | Static scan | no model, subprocess only | Deterministic floor. Runs before any model has an opinion. |
 | Review agent | `--allow-tool=read`, `--deny-tool=write,shell,url`, `--no-custom-instructions` | It judges the tree; it must not be able to change the tree it judges, or be steered by instructions inside it. |
 | Fixer agent | `--allow-tool=read,write`, `--deny-tool=url` | Only ever receives findings a gate already produced. Never stages, commits, or pushes. |
+| Discovery agent | `--allow-tool=read,shell`, `--deny-tool=write,url` | Proposes team knowledge for a repository it has never seen. It has a shell so it can call `inhousecode memory candidate add`, but no file-edit tool and no instruction to call OpenViking directly. Candidates are never authoritative until promoted. |
 | Explain session | `--allow-tool=read`, `--deny-tool=url`, interactive, custom instructions **on** | The developer's own session, not the gate's. Read is pre-approved so exploring a finding is frictionless; anything that changes the tree prompts them. It renders no verdict, so repository context is an asset rather than an attack surface. |
 
 Two further rules:
@@ -169,9 +224,10 @@ Two further rules:
   committed, never a dirty working tree. `--diff` and `--pr` do the same against
   the reviewed commit, so a reviewer's local edits cannot leak into the review.
 - **Judging another developer's branch does not edit it.** `--diff` and `--pr`
-  are report-only unless `--fix` is passed, and repairs stay disabled entirely
-  when the reviewed commit is not the one checked out — a fixer edits the working
-  tree, which in that case holds different code.
+  are report-only unless `--fix` is passed or `review.fixByDefault` is enabled.
+  Explicit `--no-fix` always wins, and repairs stay disabled entirely when the
+  reviewed commit is not the one checked out — a fixer edits the working tree,
+  which in that case holds different code.
 - **A commit never survives an explain session.** The session runs after the
   verdict, so anything it changed is unreviewed. The run exits blocked and the
   developer re-runs. A passing run is only downgraded when the tree actually
@@ -186,16 +242,15 @@ answer in two:
 
 | Half | Produced by | Contents |
 |---|---|---|
-| The briefing | `lib/explain.py`, **no model** | Every finding, the rulebook rule it violates quoted verbatim, and the reviewed source around it |
+| The briefing | `lib/explain.py`, **no model** | Every finding, its category, and the reviewed source around it |
 | The session | interactive Copilot | Reads the briefing, explains each finding in a fixed shape, then stops and waits |
 
 Two properties fall out of that split:
 
 - **The briefing works with zero model calls.** It is readable markdown. If the
   Copilot CLI is missing, printing its path is a real fallback, not an apology.
-- **The rule text is never paraphrased.** "Which rule did I break" is answered by
-  grepping the rulebook and quoting the line, so the answer cannot drift from
-  what the team actually wrote.
+- **The source is never paraphrased.** Excerpts come from what the gate
+  actually reviewed (the index in staged mode), not from the working tree.
 
 The briefing is written to `.inhousecode/cache/last-briefing.md` —
 deliberately beside the per-run cache directory, which the EXIT trap deletes, so
@@ -215,8 +270,8 @@ word count is not. A wall of text fails exactly the way no explanation does.
 |---|---|---|
 | `--staged` (default) | files in the git index | index blobs |
 | `--worktree` | modified tracked + untracked files | working tree |
-| `--diff <base-ref>` | files changed between `merge-base(base, HEAD)` and `HEAD` | `HEAD` blobs, or the working tree with `--fix` |
-| `--pr <id\|url>` | the same, with base and head resolved from the forge | PR head blobs, or the working tree with `--fix` |
+| `--diff <base-ref>` | files changed between `merge-base(base, HEAD)` and `HEAD` | `HEAD` blobs, or the working tree when repairs are enabled |
+| `--pr <id\|url>` | the same, with base and head resolved from the forge | PR head blobs, or the working tree when repairs are enabled |
 | `--path <path>` | every tracked file under a path (whole files, no diff) | working tree |
 
 `--diff` and `--pr` compare against the merge base rather than the base tip, so
@@ -238,11 +293,12 @@ If the resolved head is already present locally — the branch is checked out, o
 was fetched earlier — that object is reused instead of being fetched again, so a
 local review costs no network round trip.
 
-Once repairs are enabled (`--fix`, which also requires the reviewed commit to be
-checked out), both gates switch to reading the **working tree** instead. A fixer
-writes there, so a re-scan against the immutable commit would never see the
-previous round's work and every loop would stall on "no progress" after one
-round. Fixes are left uncommitted and unstaged for the developer to review.
+Once repairs are enabled by `--fix` or `review.fixByDefault` (which also requires
+the reviewed commit to be checked out), both gates switch to reading the
+**working tree** instead. A fixer writes there, so a re-scan against the
+immutable commit would never see the previous round's work and every loop would
+stall on "no progress" after one round. Fixes are left uncommitted and unstaged
+for the developer to review. `--no-fix` prevents this switch.
 
 The AI gate also passes the branch's commit log as context, so the reviewer can
 weigh what the change claims to do against what it actually does — a mismatch
@@ -309,10 +365,19 @@ Both loops are bounded, and both stop early.
 them to the fixer, re-scan. The loop exits when the scan is clean, when the
 budget is spent, or when a round fails to reduce the finding count. That last
 condition matters: a round that removed nothing will not start removing things on
-the next attempt, and each round costs a model invocation.
+the next attempt, and each round costs a model invocation. The re-scan runs even
+when the fixer itself fails or times out — a fixer can edit files before
+failing, so a verdict from before that round is never trusted again. `--fix` or
+`review.fixByDefault` overrides `static.fixSeverity` to `all` for that run, so
+every static finding is repaired, not only the configured subset.
 
-**Review** — `ai.maxFixLoops` (default 3), and only for blocking findings. After
-each repair the change is re-reviewed, because a fix can introduce a new problem.
+**Review** — `ai.maxFixLoops` (default 3). Normally only blocking findings are
+automatic. `--fix` or `review.fixByDefault` sends all AI findings to the bounded
+loop instead. After each repair the change is re-reviewed on whichever mode
+(normal or adversarial) started the run, because a fix can introduce a new
+problem and an adversarial finding can be invisible to the single reviewer. The
+loop also stops when a round does not reduce the finding count, and — like the
+static loop — always re-reviews even after a failed or timed-out repair round.
 
 **Triage** — the same budget, counted separately. Every set of hand-picked fixes
 is re-reviewed and the new list offered again, so "fix, see what that surfaced,
@@ -329,6 +394,32 @@ Only paths that were *already* staged are touched; the loop never adds a new fil
 to your commit. Set `static.restageFixes: false` to disable, at the cost of the
 loop no longer converging.
 
+## Team memory
+
+OpenViking is the only persistent memory store, under
+`viking://resources/inhousecode/memory-policy/`. Nothing is written to the
+repository. `lib/memory_policy.py` is the only code that talks to OpenViking;
+`lib/memory.sh` is its shell bridge. Full policy: [memory-policy.md](memory-policy.md).
+
+**Writes.** Every input — `inhousecode memory candidate add`, discovery, `[w]`
+and `[o]` at the blocked prompt — becomes a candidate at a stable URI, verified
+by reading it back. Classification may auto-promote a safe, evidenced,
+repository-local fact; anything else waits for `inhousecode memory promote`.
+Promotion writes a new record and keeps the candidate.
+
+**Reads.** After the reviewed revision is known, `ai_gate` resolves memory once
+(`memory_resolve_context`): project, global, and candidate areas are searched
+separately, then filtered by repository, status, expiry, supersession, and
+quarantine before ranking, and cut to `memory.contextMaxChars`. The result is
+held in shell variables with its hash; the same bytes go to the primary
+reviewer, the second opinion, every adversarial lens, and synthesis. Only the
+evidence manifest (URIs + hash) is persisted, to the project's
+`_review_evidence/` in OpenViking.
+
+**Failure.** If OpenViking is unreachable, memory commands exit non-zero with a
+clear message. Review prompts state that memory is unavailable and continue —
+optional context never blocks and never bluffs (invariant 9).
+
 ## The standard of craft
 
 `craft_standard()` in `lib/copilot.sh` is one block of prompt text shared by
@@ -339,7 +430,7 @@ because two copies of a standard are two standards.
 It asks for three things a model does not do by default:
 
 **Follow the repository's own guidelines.** `AGENTS.md`, `CONTRIBUTING`,
-`.github/copilot-instructions.md`, the team rulebook, and the style already
+`.github/copilot-instructions.md`, approved review knowledge, and the style already
 visible in the file. When house style and the model's preference disagree, house
 style wins. A technically correct fix written in a dialect the repository does
 not speak still costs a reviewer their afternoon.
@@ -408,9 +499,15 @@ direction is safe by construction.
 ```
 bin/inhousecode              CLI: target resolution, orchestration, verdict
 lib/common.sh                  config load, findings parsing, contract validation
-lib/config.py                  layered config resolution → shell variables
-lib/copilot.sh                 review vs. fix vs. explain invocation, permission sets
-lib/usage.py                   CLI JSONL → the agent's answer, and what it cost
+lib/config.py                   layered config resolution → shell variables
+lib/harness.sh                  AI CLI backend selection (copilot/claude-code/hermes)
+lib/harness_copilot.sh          Copilot CLI adapter
+lib/harness_claude_code.sh      Claude Code CLI adapter
+lib/harness_hermes.sh           Hermes CLI adapter
+lib/copilot.sh                  review vs. fix vs. discover vs. explain invocation, cost accounting
+lib/memory_policy.py            governed OpenViking memory: lifecycle, retrieval, snapshot
+lib/memory.sh                   shell bridge to memory_policy.py; frozen per-review context
+lib/usage.py                     harness CLI output → the agent's answer, and what it cost
 lib/pr.sh                      pull-request resolution (gh / az / pull-ref)
 lib/impact.py                  diff → the definitions it adds/modifies/removes
 lib/impact.sh                  those definitions → who else still depends on them
@@ -419,10 +516,11 @@ lib/static_report.py           semgrep JSON → finding contract
 lib/gate_static.sh             Phase 1 + repair loop
 lib/gate_ai.sh                 Phase 2 + blocking repair + finding triage
 lib/explain.sh                 briefing assembly + session handoff
-lib/explain.py                 findings + rulebook + source → briefing markdown
+lib/explain.py                 findings + source → briefing markdown
 hooks/agent-stop.sh            Copilot agentStop handler (fails open)
 hooks/copilot-hooks.template.json
 skills/code-review/            the reviewer: SKILL.md + references
+skills/discovery/               the onboarding agent: SKILL.md
 config/                        default config + JSON schema
 ```
 
@@ -442,6 +540,8 @@ config/                        default config + JSON schema
 | Copilot CLI missing at `[e]` | briefing is still written; its path is printed |
 | No terminal at `[e]` | never launches; briefing path printed instead |
 | `agentStop` hook errors | **fails open** — exits 0, turn ends normally |
+| OpenViking unavailable | memory commands fail clearly; reviews continue with memory marked unavailable |
+| AI harness missing at `discover` | usage error (exit 2); no candidate is written |
 
 Everything blocks except the `agentStop` hook, which is the one place where
 failing closed would trap a user inside a session they cannot exit.

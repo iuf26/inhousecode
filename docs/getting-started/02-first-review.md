@@ -12,11 +12,19 @@ In the repository you want reviewed:
 inhousecode init
 ```
 
-This creates `.inhousecode/` with two things:
+This creates `.inhousecode/config.json` (see
+[docs/configuration.md](../configuration.md)) and initializes the shared
+OpenViking namespace. No memory is stored in the repository.
 
-- `config.json` — the tool's settings for this repo (defaults are sane; see
-  [docs/configuration.md](../configuration.md) when you want to change one)
-- `developer-rulebook.md` — empty for now. That's page 3.
+Optionally, let an agent propose a first set of repository knowledge:
+
+```bash
+inhousecode discover
+```
+
+It reads your manifest, linter/CI config, and existing docs, then writes a
+handful of evidence-backed **candidates** — unverified until promoted. Run
+`inhousecode discover --gate` to see proposals without writing anything.
 
 ## Make a small change
 
@@ -33,14 +41,18 @@ inhousecode review --worktree
 `--worktree` reviews everything currently uncommitted, staged or not — the
 easiest target for a first look. You'll see two phases run in order:
 
-1. **Static** — Semgrep scans, and if it finds something fixable, a bounded
-   repair loop fixes it and re-scans before reporting.
-2. **AI review** — reads your diff (and your rulebook, which is empty right
-   now, so this pass has nothing team-specific to check yet) and reports
-   findings with a suggested fix for each.
+1. **Static** — Semgrep scans. It repairs and re-scans when static autofix,
+   `--fix`, or `review.fixByDefault` enables the bounded loop.
+2. **AI review** — reads your diff plus a frozen snapshot of approved
+   OpenViking knowledge (likely empty right now) and reports findings with a
+   suggested fix for each.
 
 You'll end with a verdict — pass, or a list of findings split into
 "fixed automatically" and "here's what we found, your call."
+
+For a report-only first look, add `--no-fix`. To repair every static and AI
+finding once, add `--fix`. Later, set `review.fixByDefault: true` in
+`.inhousecode/config.json` if that should be the repository's normal behavior.
 
 ## Try the other targets
 
@@ -52,6 +64,5 @@ inhousecode review --mode static     # skip the AI phase, just Semgrep
 
 ## Next
 
-Right now the AI phase is checking your code against nothing but general
-judgment — it has no idea what *your* team cares about. That's what the
-rulebook fixes: [Write your first rule](03-first-rule.md).
+Right now the AI phase has only general judgment. Teach it what *your* team
+cares about: [Add your first piece of team knowledge](03-first-rule.md).

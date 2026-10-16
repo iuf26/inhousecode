@@ -32,6 +32,9 @@ INTEGER_BOUNDS = {
     ("ai", "critiqueRounds"): (0, 5),
     ("agentStop", "maxTurns"): (1, 20),
     ("explain", "contextLines"): (0, 25),
+    ("memory", "contextMaxChars"): (500, 20000),
+    ("memory", "autoPromoteAfterReviews"): (0, 100),
+    ("adversarial", "maxLenses"): (1, 4),
 }
 # Keys that were renamed. Unknown keys are a hard error, so a rename would break
 # every config in the wild; these are accepted silently and folded into the new
@@ -45,6 +48,10 @@ RENAMED_KEYS = {
 SEMGREP_CONFIG_ALPHABET = set(
     "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._/-"
 )
+# The harness key selects which AI CLI backend runs the review, repair, and
+# explain agents. Validated against a closed set so a typo never silently falls
+# back to a default that might not be installed.
+VALID_HARNESSES = {"copilot", "claude-code", "codex", "hermes"}
 # Shell variables are named INHOUSECODE_<SECTION>_<KEY> in upper snake case.
 SHELL_PREFIX = "INHOUSECODE"
 
@@ -55,7 +62,9 @@ class ConfigError(ValueError):
 
 def load_json_object(path: Path, label: str) -> dict:
     try:
-        value = json.loads(path.read_text(encoding="utf-8"))
+        # PowerShell 5.1 writes a BOM for `-Encoding UTF8`; utf-8-sig accepts
+        # both that output and ordinary UTF-8 configuration files.
+        value = json.loads(path.read_text(encoding="utf-8-sig"))
     except (OSError, UnicodeError, json.JSONDecodeError) as error:
         raise ConfigError(f"could not read {label} ({path}): {error}") from error
     if not isinstance(value, dict):
@@ -101,6 +110,8 @@ def validate_scalar(path: tuple[str, ...], default_value, value):
     if isinstance(default_value, int):
         if not isinstance(value, int) or isinstance(value, bool):
             raise ConfigError(f"{dotted} must be an integer")
+        if path == ("memory", "autoPromoteAfterReviews") and value == 1:
+            raise ConfigError(f"{dotted} must be 0 or between 2 and 100")
         low, high = INTEGER_BOUNDS.get(path, (0, 10_000))
         if not low <= value <= high:
             raise ConfigError(f"{dotted} must be between {low} and {high}")
@@ -119,6 +130,12 @@ def validate_scalar(path: tuple[str, ...], default_value, value):
             raise ConfigError(f"{dotted} must be a string")
         if any(ord(character) < 32 for character in value):
             raise ConfigError(f"{dotted} contains control characters")
+        # The harness key is a closed enum; a typo must not silently select a
+        # backend the user does not have installed.
+        if path == ("harness",) and value not in VALID_HARNESSES:
+            raise ConfigError(
+                f"{dotted} must be one of {', '.join(sorted(VALID_HARNESSES))}"
+            )
         return value
     raise ConfigError(f"{dotted} has an unsupported default type")
 

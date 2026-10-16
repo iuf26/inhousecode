@@ -64,7 +64,7 @@ to be earned.
 
 - Two findings describing one defect at different lines are one finding — keep
   the one at the origin.
-- A finding restating a rulebook violation already reported under its `id` is a
+- A finding restating approved memory knowledge already reported under its stable ID is a
   DROP.
 - Anything a pattern matcher would have caught is out of scope for this review
   and a DROP; the static gate already ran.

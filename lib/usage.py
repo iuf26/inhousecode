@@ -1,10 +1,21 @@
 #!/usr/bin/env python3
-"""Extract the assistant's answer and the run's cost from a Copilot CLI JSONL log.
+"""Extract the assistant's answer and the run's cost from an agent CLI log.
 
-The gate runs its agents with --output-format json for one reason: text mode
+The gate runs its agents with a JSON output mode for one reason: text mode
 reports what the model said but not what it cost, and a review that quietly
 spends a developer's budget is a review they cannot make an informed decision
-about. JSONL carries both on the same stream.
+about. JSON carries both on the same stream.
+
+Two harness shapes are supported, auto-detected per event:
+
+  Copilot CLI    JSONL: one streaming event per line. The final answer is the
+                 assistant.message event flagged phase=final_answer. Cost is
+                 reported as nano-AIU on a session.usage_checkpoint event.
+  Claude Code /
+  Hermes CLI     A single JSON object of type "result", carrying the answer
+                 in "result" and cost in USD under "total_cost_usd".
+  Codex CLI      JSONL whose completed agent_message item carries the final
+                 answer. Codex reports tokens, not a price; cost stays unknown.
 
 Two modes, deliberately separate:
 
@@ -12,8 +23,9 @@ Two modes, deliberately separate:
          it. This feeds the gate's own parsing, so it must be exact.
   usage  the cost of the run. This is a report line, never a gate input.
 
-Cost is reported as nano-AIU because that is the unit the CLI emits; converting
-to a currency here would be inventing precision the CLI never claimed.
+Cost is reported in whatever unit the CLI emitted -- nano-AIU for Copilot,
+USD for Claude Code and Hermes -- because converting between them here would
+be inventing an exchange rate the CLI never claimed.
 """
 
 from __future__ import annotations
@@ -28,8 +40,9 @@ FINAL_PHASE = "final_answer"
 ASSISTANT_EVENT = "assistant.message"
 USAGE_EVENT = "session.usage_checkpoint"
 RESULT_EVENT = "result"
+CODEX_ITEM_EVENT = "item.completed"
+CODEX_AGENT_MESSAGE = "agent_message"
 NANO_PER_AIU = 1_000_000_000
-
 
 def read_events(path: str) -> list[dict]:
     events = []
@@ -48,17 +61,31 @@ def read_events(path: str) -> list[dict]:
                 events.append(event)
     return events
 
-
 def extract_text(events: list[dict]) -> str:
     """The answer, as text mode would have printed it.
 
     Falls back to every assistant message when none is flagged final: a model
     that never emits a final_answer phase has still said something, and an empty
     result here would be read as a malformed report rather than as a parse bug.
+
+    Claude Code and Hermes emit a single "result" event instead of a stream of
+    assistant.message events; its "result" field IS the final answer.
     """
     final, every = [], []
     for event in events:
-        if event.get("type") != ASSISTANT_EVENT:
+        kind = event.get("type")
+        if kind == CODEX_ITEM_EVENT:
+            item = event.get("item") or {}
+            content = item.get("text")
+            if item.get("type") == CODEX_AGENT_MESSAGE and isinstance(content, str) and content:
+                final.append(content)
+            continue
+        if kind == RESULT_EVENT:
+            result = event.get("result")
+            if isinstance(result, str) and result:
+                final.append(result)
+            continue
+        if kind != ASSISTANT_EVENT:
             continue
         data = event.get("data") or {}
         content = data.get("content")
@@ -69,14 +96,17 @@ def extract_text(events: list[dict]) -> str:
             final.append(content)
     return "\n".join(final or every)
 
-
-def extract_usage(events: list[dict]) -> tuple[int, int]:
-    """Total nano-AIU and premium requests for the run.
+def extract_usage(events: list[dict]) -> tuple[int, int, float]:
+    """Total nano-AIU, premium requests, and USD cost for the run.
 
     Checkpoints are cumulative within a session, so the last one is the total --
-    summing them would count every earlier checkpoint again.
+    summing them would count every earlier checkpoint again. nano and usd are
+    mutually exclusive in practice (one harness reports one or the other); both
+    are returned so the caller can print whichever is non-zero without having
+    to know which harness produced the log.
     """
     nano = premium = 0
+    usd = 0.0
     for event in events:
         kind = event.get("type")
         if kind == USAGE_EVENT:
@@ -86,8 +116,11 @@ def extract_usage(events: list[dict]) -> tuple[int, int]:
         elif kind == RESULT_EVENT:
             usage = event.get("usage") or {}
             premium = max(premium, int(usage.get("premiumRequests") or 0))
-    return nano, premium
-
+            try:
+                usd = max(usd, float(event.get("total_cost_usd") or 0.0))
+            except (TypeError, ValueError):
+                pass
+    return nano, premium, usd
 
 def main() -> int:
     parser = argparse.ArgumentParser()
@@ -104,10 +137,9 @@ def main() -> int:
         sys.stdout.write(extract_text(events))
         return 0
 
-    nano, premium = extract_usage(events)
-    print(f"{nano}\t{premium}")
+    nano, premium, usd = extract_usage(events)
+    print(f"{nano}\t{premium}\t{usd}")
     return 0
-
 
 if __name__ == "__main__":
     sys.exit(main())

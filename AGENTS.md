@@ -1,10 +1,29 @@
 # AGENTS.md — inhousecode
+Governed memory lives only in OpenViking, under the canonical namespace:
+
+```text
+viking://resources/inhousecode/memory-policy/
+├── _schema/                 Memory types, required fields, statuses
+├── global/                  Approved knowledge shared across all repositories
+├── projects/<repository-id>/   Approved knowledge scoped to one repository
+└── candidate_memory/
+    ├── inbox/               Unclassified feedback, pending triage
+    ├── classified/          Scoped and confidence-rated, pending promotion
+    └── quarantine/          Unrelated or prompt-injection-like content
+```
+
+There is no repository-local memory store. `.inhousecode/` holds configuration
+and transient cache only — never memory records. If OpenViking is
+unavailable, memory operations fail clearly; they never fall back to a local
+store.
 
 ## What this is
 
 A two-phase review gate for AI-generated code: deterministic Semgrep analysis
-with a bounded repair loop, then an AI code review against a team-owned rulebook.
-Triggered from a git pre-commit hook or from the Copilot CLI `agentStop` hook.
+with a bounded repair loop, then an AI code review against governed
+project/global knowledge stored in OpenViking. Triggered from a git
+pre-commit hook, the Copilot CLI `agentStop` hook, or an explicit
+`inhousecode review` call from Hermes or Codex.
 
 Read [README.md](README.md) for the reasoning and
 [docs/architecture.md](docs/architecture.md) for the pipeline.
@@ -18,8 +37,12 @@ Read [README.md](README.md) for the reasoning and
 | `lib/pr.sh` | Pull-request resolution via `gh` / `az`, with a pull-ref fallback |
 | `lib/usage.py` | Reads the agent's answer and the run's cost from the CLI's JSONL |
 | `lib/impact.{py,sh}` | Blast radius: what the change declares, and who depends on it |
+| `lib/memory_policy.py`, `lib/memory.sh` | OpenViking-only governed memory: candidates, promotion, retrieval |
+| `lib/finding_view.py` | Renders numbered findings with source excerpts and highlighting |
+| `lib/integrations.py` | Installs/updates/removes the managed Hermes and Codex Agent Skills |
 | `hooks/` | Trigger handlers (git pre-commit shim, Copilot `agentStop`) |
 | `skills/code-review/` | The reviewer skill: `SKILL.md` + `references/` |
+| `skills/inhousecode/` | The thin harness adapter skill shipped to Hermes and Codex |
 | `config/` | Default configuration and its JSON schema |
 | `docs/` | Architecture, configuration, team customization |
 
@@ -40,12 +63,13 @@ Break any of these and the tool is unsound:
    never trap a user inside a session.
 6. **Staged mode scans the index, not the working tree.** Files are materialized
    from git blobs into an isolated directory. `--diff` and `--pr` do the same
-   from the reviewed commit, are report-only unless `--fix` is passed, and never
-   repair when that commit is not the one checked out.
-7. **Nothing outside `ai.autofixBlocking` is repaired without an explicit pick.**
-   The picker offers every finding, blocking or not, and applies only the
-   numbers the developer typed. Findings are numbered once per run, in one
-   table, so the number on screen is the number you may type.
+   from the reviewed commit, are report-only unless `--fix` is passed or
+   `review.fixByDefault` is enabled, and never repair when that commit is not
+   the one checked out. Explicit `--no-fix` always wins.
+7. **Non-blocking findings need an explicit repair opt-in.** The opt-in is a
+   typed picker selection, `--fix`, or `review.fixByDefault: true`. The picker
+   applies only the numbers the developer typed. Findings are numbered once per
+   run, in one table, so the number on screen is the number you may type.
 8. **Any fix is followed by a re-review before the verdict stands.** This holds
    for automatic repair, hand-picked fixes, and explain sessions alike. A fix
    edits the tree, so an un-re-reviewed verdict describes code that no longer
@@ -75,6 +99,7 @@ Break any of these and the tool is unsound:
 ## Conventions
 
 - Bash for orchestration, Python 3 for anything parsing JSON. No other runtime.
+- Keep code and documentation simple, clear, and easy to read.
 - Magic values are named constants grouped at the top of the file.
 - Keep `config/review.config.schema.json` in sync with
   `config/review.config.default.json` and with `INTEGER_BOUNDS` in `lib/config.py`.

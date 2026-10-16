@@ -58,7 +58,7 @@ Both figures are from the vendors' own documentation (see
 |---|---|---|
 | Claude Code Review | **$15–25** | Deepest analysis of the three; ~20 minutes per review; requires a Team/Enterprise plan |
 | GitHub Copilot code review | **$0.05–$5** | Plus GitHub Actions minutes; cost rises with change size |
-| inhousecode | Runs on your existing Copilot CLI seats | No new vendor, no new licence; each run reports exactly what it spent, itemised by phase |
+| inhousecode | Runs on the AI CLI seats you already have (Copilot, Claude Code, Codex, or Hermes) | No new vendor, no new licence; each run reports exactly what it spent, itemised by phase |
 
 ### Why the timing matters more than the per-review price
 
@@ -94,8 +94,9 @@ Rather than quote an industry statistic, use your team's real figures:
 
 Two costs belong on the other side of the ledger, and neither is hidden:
 
-- **Copilot CLI seats.** Phase 2 needs them. Most teams adopting this already
-  have them; if yours doesn't, that's the real line item.
+- **An AI CLI seat.** Phase 2 needs one — Copilot CLI, Claude Code CLI, or
+  Hermes, whichever the team configures. Most teams adopting this already
+  have one; if yours doesn't, that's the real line item.
 - **Setup and rule-writing.** Roughly a day to install and agree the first
   rules, then a few minutes whenever a team decides to write one down.
 
@@ -111,8 +112,8 @@ the pattern that doesn't scale, the library the team stopped using and why.
 Today that knowledge lives in people's memory and in review comments typed out
 fresh each time someone repeats the same mistake. It leaves when they leave.
 
-inhousecode gives it somewhere to live: a single plain-language file in your
-repository, one line per rule, which the reviewer re-reads on every run.
+inhousecode gives it somewhere to live: governed project and global records in
+OpenViking, resolved into one frozen, traceable snapshot for each review.
 
 | Timeframe | What the team has |
 |---|---|
@@ -120,9 +121,8 @@ repository, one line per rule, which the reviewer re-reads on every run.
 | **Month three** | The rules your team argues about most often, enforced automatically and consistently |
 | **Year one** | An accumulated standard that survives people changing teams, and that onboards new joiners by enforcing the house style rather than expecting them to absorb it |
 
-The asset is not the tool. The asset is the rulebook, and you own it — it's a
-file in your repository, readable by anyone, not data held inside a vendor's
-product.
+The asset is not the tool. The asset is the governed knowledge, and you control
+its storage, evidence, scope, approval, expiry, and promotion in OpenViking.
 
 ---
 
@@ -137,9 +137,9 @@ it yourself.
 | | |
 |---|---|
 | **Procurement** | None. MIT-licensed, installed from a repository. No contract, no new supplier. |
-| **New vendors handling your code** | None. Phase 2 uses the Copilot CLI your team already has; nothing runs on inhousecode's own servers. |
+| **New vendors handling your code** | None. Phase 2 uses whichever AI CLI your team already has (Copilot, Claude Code, Codex, or Hermes); nothing runs on inhousecode's own servers. |
 | **Setup time** | Under an hour for the tool; about a day including agreeing your first rules. |
-| **Rollback** | Uninstall the hook. The rulebook is a text file; nothing is locked in. |
+| **Rollback** | Uninstall the hook. Export or remove your OpenViking records independently; inhousecode does not lock them in a local format. |
 
 ### Honest limitations
 
@@ -148,9 +148,10 @@ A business case that only lists upsides isn't one. Four things to weigh:
 - **It reviews the change, not the whole codebase.** A hosted service reading
   your entire repository in parallel will find categories of problem this
   cannot. It's a gate, not a replacement for a full-codebase reviewer.
-- **It depends on the Copilot CLI today.** If your organisation doesn't use
-  Copilot, that's a prerequisite cost, not a detail.
-- **The value tracks the rulebook.** A team that never writes rules down gets a
+- **It depends on an AI CLI today.** Copilot, Claude Code, Codex, or Hermes — one
+  of the four is required. If your organisation uses none of them, that's a
+  prerequisite cost, not a detail.
+- **The value tracks governed knowledge.** A team that never records its review knowledge gets a
   competent generic reviewer and little of the compounding benefit above.
 - **It is early software.** Version 0.1.0, developed in the open. Suitable for a
   team willing to give feedback; not yet a safe default for an entire
@@ -165,7 +166,7 @@ evidence-based:
 |---|---|
 | Review round trips per pull request | The direct target — this should fall first |
 | Time from PR opened to merged | Captures the calendar cost, not just the effort cost |
-| Repeat findings of the same rule | Should trend toward zero as rules get written down; if it doesn't, the rulebook isn't being used |
+| Repeat findings of the same rule | Should trend toward zero as knowledge is promoted; if it does not, retrieval or enforcement needs attention |
 | Reported spend per run | Printed by the tool itself, so budget stays visible rather than inferred |
 
 ---
@@ -181,8 +182,8 @@ it themselves.
 |---|---|---|
 | **Licence and cost** | MIT, free | Commercial; priced on team size and repository count |
 | **Where it runs** | Your machines and CI runners | Hosted and operated for you |
-| **Setup and upkeep** | You install it and manage Copilot CLI seats | Nothing to install; no seats to administer |
-| **Rulebooks** | One file per repository, owned by that team | Maintained centrally and applied org-wide, across every repository |
+| **Setup and upkeep** | You install it and manage your AI CLI's seats | Nothing to install; no seats to administer |
+| **Review knowledge** | Governed OpenViking project/global records operated by the team | Managed centrally and applied org-wide, across every repository |
 | **Visibility** | Per-run output in the terminal | Team dashboard: findings over time, rule adoption, spend per team |
 | **Support** | Community — GitHub issues | Commercial support with an SLA |
 | **The review itself** | The complete two-phase gate | The same two-phase gate |
@@ -190,14 +191,14 @@ it themselves.
 The last row is the important one. **The self-hosted version is not a trial or a
 reduced tier** — it is the full pipeline, and it will stay that way. The managed
 version sells operation, org-wide governance and support, not access to the
-gate itself. Your rulebook remains a plain readable file either way, so moving
-between the two is not a migration.
+gate itself. The policy records remain structured and exportable, so moving
+between operating models does not require rewriting the review rules.
 
 ### Which one fits
 
 - **Self-hosted** suits a single team, or any organisation that wants code and
   configuration to stay on infrastructure it controls, and is comfortable
-  running the tool and managing Copilot CLI seats.
+  running the tool and managing its AI CLI's seats.
 - **Managed** suits several teams at once — particularly where one standard
   should apply across many repositories, where someone needs a cross-team view
   of what's being found, or where nobody has capacity to operate it.
@@ -228,9 +229,9 @@ adoption and quiet uninstallation.
 |---|---|
 | **What problem does it solve?** | AI writes code faster than people can review it, so review quality is falling as volume rises |
 | **What's different about it?** | It checks before the commit, not after the push, against rules your team defined |
-| **What does it cost?** | No licence and no new vendor; runs on existing Copilot CLI seats and reports its own spend per run |
+| **What does it cost?** | No licence and no new vendor; runs on an existing AI CLI seat (Copilot, Claude Code, Codex, or Hermes) and reports its own spend per run |
 | **What's the long-term return?** | Your team's review standards become a durable asset that outlasts individuals |
-| **What's the risk?** | Early software, diff-scoped rather than whole-codebase, and dependent on the Copilot CLI |
+| **What's the risk?** | Early software, diff-scoped rather than whole-codebase, and dependent on one of the supported AI CLIs |
 | **How reversible is it?** | Entirely — remove one hook; the rules stay as a readable file you own |
 
 ---

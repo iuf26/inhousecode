@@ -3,7 +3,7 @@
 # inhousecode - a two-phase review gate for AI-generated code.
 #
 #   Phase 1  deterministic Semgrep analysis with a bounded repair loop
-#   Phase 2  AI code review against the team's own rulebook
+#   Phase 2  AI code review against governed OpenViking knowledge
 #
 # See README.md for the reasoning behind the two phases.
 
@@ -30,16 +30,26 @@ inhousecode $VERSION - smart review gate for AI-generated code
 
 USAGE
   inhousecode review [options]     run the review gates
+  inhousecode show <number>        show one finding and its source excerpt
   inhousecode explain              open a session over the last findings
   inhousecode init                 create .inhousecode/ in this repository
   inhousecode install-hooks [...]  install the pre-commit and/or agent-stop hook
   inhousecode uninstall-hooks      remove hooks installed by inhousecode
+  inhousecode memory <cmd>         use the shared OpenViking memory policy
+  inhousecode integrate <cmd>      install native Hermes/Codex skill commands
+  inhousecode discover             propose candidate memory for this repo
   inhousecode doctor               check the local environment
   inhousecode version
 
 REVIEW OPTIONS
   --pr <id|url>       review a pull request; its base branch and head commit
                       are resolved from GitHub or Azure DevOps automatically
+  --ticket <id|url>  fetch the ticket the work came from as a second intent
+                      source (GitHub issues via gh; other trackers via URL)
+  --intent-file <p>  read a free-form statement of intent from a file (the
+                      escape hatch for trackers this tool cannot fetch)
+  --adversarial      heavy multi-lens review on the configured adversarial
+                      model; for whole PRs, not every commit
   --staged            review the git index (default)
   --worktree          review uncommitted working-tree changes
   --diff <base-ref>   review the commits this branch adds on top of <base-ref>
@@ -47,7 +57,7 @@ REVIEW OPTIONS
   --path <path>       review every file under a path
   --mode <mode>       both | static | ai   (default: both)
   --no-fix            report only; never edit files
-  --fix               allow repairs in --diff / --pr mode (off by default there)
+  --fix               repair all static and AI findings for this run
   --gate              non-interactive: no prompts, exit code is the verdict
   --verbose           stream full agent logs
 
@@ -56,8 +66,44 @@ INSTALL-HOOKS OPTIONS
   --agent-stop        install the Copilot CLI agentStop hook
   (default: whatever triggers.* says in the resolved configuration)
 
+MEMORY COMMANDS
+  inhousecode memory init
+      initialize the shared OpenViking namespace
+  inhousecode memory candidate add <text>
+      add unverified developer feedback to candidate_memory/inbox
+  inhousecode memory view --prompt <question>
+      search and display memory without changing it
+  inhousecode memory context [options]
+      build a review snapshot (internal/read-only command)
+  inhousecode memory classify <candidate-id> [options]
+      classify a candidate; safe project facts may promote automatically
+  inhousecode memory promote <candidate-id> --target <scope> --reason <text>
+      human-approved promotion to project or global knowledge
+  inhousecode memory harvest [--lookback-days N]
+      turn what OpenViking learned from review sessions into candidates
+  inhousecode memory schedule install|uninstall|status [--hour H] [--minute M]
+      run the harvest daily (launchd on macOS, cron elsewhere)
+  OpenViking is the only persistent memory store. There is no local fallback.
+
+HARNESS INTEGRATIONS
+  inhousecode integrate install hermes|codex|all
+  inhousecode integrate status [hermes|codex|all]
+  inhousecode integrate uninstall hermes|codex|all
+      install or remove the native Agent Skill command for a user account
+
+DISCOVER OPTIONS
+  --gate               non-interactive: write nothing, print what would change
+  (an AI agent inspects the repo and proposes candidate memory; run
+  once on a fresh repo, or any time the stack has changed significantly)
+
 ENVIRONMENT
   COPILOT_BIN         explicit path to the Copilot CLI
+  CLAUDE_CODE_BIN     explicit path to the Claude Code CLI
+  HERMES_BIN          explicit path to the Hermes CLI
+  CODEX_BIN           explicit path to the Codex CLI
+  INHOUSECODE_HARNESS harness backend: copilot, claude-code, codex, hermes
+  INHOUSECODE_OV_SESSION_USER  OpenViking user for review sessions
+                      (default: inhousecode-<hash of the repository>)
   INHOUSECODE_VERBOSE=1  same as --verbose
 EOF
 }
@@ -78,6 +124,7 @@ TARGET_PATH=""
 GATE_MODE="both"
 GATE_ONLY=0
 NO_FIX=0
+OVERRIDE_REASON=""
 FIX_REQUESTED=0
 # --diff / --pr mode: DIFF_BASE is what the user typed or what the forge
 # reported, DIFF_MERGE_BASE is the commit the branch actually forked from, and
@@ -100,6 +147,9 @@ PR_ID=""
 PR_TITLE=""
 PR_URL=""
 PR_BASE_BRANCH=""
+TICKET_REFERENCE=""
+INTENT_FILE=""
+ADVERSARIAL_REQUESTED=0
 
 parse_review_args() {
   while [ "$#" -gt 0 ]; do
@@ -111,6 +161,17 @@ parse_review_args() {
         [ "$#" -gt 0 ] || { fail "inhousecode: --pr needs a pull-request number or URL."; exit $EXIT_USAGE; }
         TARGET_MODE="diff"; PR_REFERENCE="$1"
         ;;
+      --ticket)
+        shift
+        [ "$#" -gt 0 ] || { fail "inhousecode: --ticket needs an issue/ticket number or URL."; exit $EXIT_USAGE; }
+        TICKET_REFERENCE="$1"
+        ;;
+      --intent-file)
+        shift
+        [ "$#" -gt 0 ] || { fail "inhousecode: --intent-file needs a file path."; exit $EXIT_USAGE; }
+        INTENT_FILE="$1"
+        ;;
+      --adversarial) ADVERSARIAL_REQUESTED=1 ;;
       --diff|--base)
         shift
         [ "$#" -gt 0 ] || { fail "inhousecode: --diff needs a base ref, e.g. --diff main."; exit $EXIT_USAGE; }
@@ -182,6 +243,48 @@ resolve_pr_target() {
   DIFF_HEAD="$PR_HEAD_REV"
   say "${C_BOLD}PR #$PR_ID${C_RESET}${PR_TITLE:+ - $PR_TITLE}"
   say "  ${DIFF_HEAD:0:9} -> $PR_BASE_BRANCH${PR_URL:+   $PR_URL}"
+}
+
+# --ticket: fetch the ticket the work came from, as a second intent source.
+# Best-effort: a ticket that cannot be fetched is reported and skipped, never
+# fatal. Exports TICKET_* consumed by the intent brief in gate_ai.sh.
+resolve_ticket_target() {
+  # shellcheck source=../lib/pr.sh
+  source "$INHOUSECODE_HOME/lib/pr.sh"
+  # shellcheck source=../lib/ticket.sh
+  source "$INHOUSECODE_HOME/lib/ticket.sh"
+  if resolve_ticket "$TICKET_REFERENCE"; then
+    export TICKET_ID TICKET_TITLE TICKET_URL TICKET_BODY
+    say "${C_BOLD}Ticket ${TICKET_ID}${C_RESET}${TICKET_TITLE:+ - $TICKET_TITLE}"
+  fi
+}
+
+# --intent-file: read a free-form statement of intent verbatim. The universal
+# escape hatch for trackers this tool cannot reach (Jira behind SSO, Notion,
+# a pasted spec). A missing or empty file is reported and skipped.
+resolve_intent_file() {
+  if [ ! -f "$INTENT_FILE" ]; then
+    warn "inhousecode: --intent-file '$INTENT_FILE' not found; continuing without it."
+    return 0
+  fi
+  INTENT_FILE_BODY="$(cat "$INTENT_FILE" 2>/dev/null)"
+  if [ -z "$INTENT_FILE_BODY" ]; then
+    warn "inhousecode: --intent-file '$INTENT_FILE' is empty; continuing without it."
+    return 0
+  fi
+  export INTENT_FILE_BODY
+  say "${C_BOLD}Intent file${C_RESET} - $INTENT_FILE"
+}
+
+# --adversarial: turn on the heavy multi-lens pass for this run. Requires an
+# adversarial model to have been configured at install; without one, it falls
+# back to the primary review model and says so.
+enable_adversarial() {
+  export INHOUSECODE_ADVERSARIAL_ENABLED=1
+  if [ -z "${INHOUSECODE_ADVERSARIAL_MODEL:-}" ]; then
+    warn "inhousecode: no adversarial model configured; lenses will run on the primary review model."
+    warn "  Set adversarial.model in .inhousecode/config.json to use a different model."
+  fi
 }
 
 prepare_cache() {
@@ -257,11 +360,11 @@ resolve_blocked() {
     return $EXIT_BLOCKED
   fi
   if [ "${INHOUSECODE_EXPLAIN_ENABLED:-0}" = "1" ]; then
-    prompt=$'\n  [d] show raw gate output   [e] explain these findings in Copilot\n  [o] override and continue  [a] abort\n  > '
-    choices='d, e, o, or a'
+    prompt=$'\n  [d] show raw gate output   [e] explain these findings\n  [w] record a team preference   [o] override and continue   [a] abort\n  > '
+    choices='d, e, w, o, or a'
   else
-    prompt=$'\n  [d] show raw gate output   [o] override and continue   [a] abort\n  > '
-    choices='d, o, or a'
+    prompt=$'\n  [d] show raw gate output   [w] record a team preference\n  [o] override and continue   [a] abort\n  > '
+    choices='d, w, o, or a'
   fi
   while :; do
     ask answer "$prompt"
@@ -269,6 +372,11 @@ resolve_blocked() {
       d|D)
         [ -n "$STATIC_OUTPUT" ] && printf '\n--- static ---\n%s\n' "$STATIC_OUTPUT" > /dev/tty
         [ -n "$AI_OUTPUT" ] && printf '\n--- review ---\n%s\n' "$AI_OUTPUT" > /dev/tty
+        ;;
+      w|W)
+        # Capture a team preference from a rejected finding, then re-prompt --
+        # recording knowledge does not itself decide the commit.
+        capture_blocked_preference
         ;;
       e|E)
         [ "${INHOUSECODE_EXPLAIN_ENABLED:-0}" = "1" ] || { printf '  Choose %s.\n' "$choices" > /dev/tty; continue; }
@@ -283,6 +391,18 @@ resolve_blocked() {
         ask answer '  Reason for the override (required): '
         [ -n "$answer" ] || { printf '  A reason is required.\n' > /dev/tty; continue; }
         warn "inhousecode: gates overridden - reason: $answer"
+        OVERRIDE_REASON="$answer"
+        # The override reason is the clearest statement of a team preference the
+        # gate ever gets. Offer to keep it rather than discard it to stderr.
+        if [ "${INHOUSECODE_MEMORY_ENABLED:-1}" = "1" ] && has_tty; then
+          local record
+          ask record $'  Record this as a team preference so it is not flagged again? [y/N] '
+          case "$record" in
+            y|Y|yes|YES)
+              memory_capture_preference "$(gate_findings_context)" "$answer"
+              ;;
+          esac
+        fi
         return $EXIT_PASS
         ;;
       a|A|"") return $EXIT_BLOCKED ;;
@@ -291,13 +411,46 @@ resolve_blocked() {
   done
 }
 
+# The findings this run produced, as plain context for a memory draft. Both
+# gates' outputs, findings only, so the draft agent can see what was flagged.
+gate_findings_context() {
+  {
+    [ -n "$STATIC_OUTPUT" ] &&
+      select_findings "$STATIC_OUTPUT" "$STATIC_FINDING_MARKER" all |
+        awk -F'\t' 'NF>=5 { printf "- [static][%s] %s | %s\n", $2, $3, $4 }'
+    [ -n "$AI_OUTPUT" ] &&
+      select_findings "$AI_OUTPUT" "$AI_FINDING_MARKER" all |
+        awk -F'\t' 'NF>=5 { printf "- [review][%s] %s | %s\n", $2, $3, $4 }'
+  } 2>/dev/null
+}
+
+# The [w] handler at the blocked prompt: let the developer point at a finding
+# they disagree with, then capture the preference through the option-(c) flow.
+capture_blocked_preference() {
+  local context
+  context="$(gate_findings_context)"
+  if [ -n "$context" ]; then
+    printf '\n  Findings from this run:\n%s\n' "$context" > /dev/tty
+  fi
+  memory_capture_preference "$context"
+}
+
 cmd_review() {
   parse_review_args "$@"
   require_repo
   load_config || exit $EXIT_USAGE
   [ -n "$PR_REFERENCE" ] && resolve_pr_target
+  [ -n "$TICKET_REFERENCE" ] && resolve_ticket_target
+  [ -n "$INTENT_FILE" ] && resolve_intent_file
+  [ "$ADVERSARIAL_REQUESTED" = "1" ] && enable_adversarial
   [ "$TARGET_MODE" = "diff" ] && resolve_diff_base
   prepare_cache
+
+  # Resolve --fix, --no-fix, and the repository's opt-in default before target
+  # safety can turn a diff/PR review back into report-only mode.
+  # shellcheck source=../lib/fix_policy.sh
+  source "$INHOUSECODE_HOME/lib/fix_policy.sh"
+  fix_policy_apply
 
   # Reviewing a pull request means judging someone else's committed work: the
   # default is to report, not to rewrite their branch under them.
@@ -315,6 +468,7 @@ cmd_review() {
   fi
 
   if [ "$NO_FIX" = "1" ]; then
+    INHOUSECODE_FIX_ALL=0
     INHOUSECODE_STATIC_AUTOFIX=0
     INHOUSECODE_AI_AUTOFIX_BLOCKING=0
     INHOUSECODE_AI_TRIAGE_FINDINGS=0
@@ -353,8 +507,12 @@ cmd_review() {
   source "$INHOUSECODE_HOME/lib/gate_static.sh"
   # shellcheck source=../lib/gate_ai.sh
   source "$INHOUSECODE_HOME/lib/gate_ai.sh"
+  # shellcheck source=../lib/gate_adversarial.sh
+  source "$INHOUSECODE_HOME/lib/gate_adversarial.sh"
   # shellcheck source=../lib/explain.sh
   source "$INHOUSECODE_HOME/lib/explain.sh"
+  # shellcheck source=../lib/memory.sh
+  source "$INHOUSECODE_HOME/lib/memory.sh"
 
   if [ "$INHOUSECODE_STATIC_ENABLED" = "1" ] && [ "$INHOUSECODE_STATIC_AUTOFIX" = "1" ]; then
     ensure_copilot || INHOUSECODE_STATIC_AUTOFIX=0
@@ -365,22 +523,61 @@ cmd_review() {
 
   print_summary
   explain_persist_briefing
+  explain_print_finding_details auto
   if gates_blocked; then
+    local blocked_rc
     resolve_blocked
-    exit $?
+    blocked_rc=$?
+    if [ "$blocked_rc" -eq "$EXIT_PASS" ]; then
+      memory_record_session "overridden" "$OVERRIDE_REASON"
+    else
+      memory_record_session "blocked"
+    fi
+    exit "$blocked_rc"
   fi
   # A passing run that ends with a modified tree has not actually been reviewed:
   # the session's edits landed after the verdict. Re-run rather than wave it on.
   if [ "${EXPLAIN_TREE_CHANGED:-0}" = "1" ]; then
     warn "inhousecode: the session changed files after the gates ran."
     info "inhousecode: run the gate (or your commit) again to check the tree as it now stands."
+    memory_record_session "blocked"
     exit $EXIT_BLOCKED
   fi
+  memory_record_session "pass"
   good "inhousecode: PASS"
   exit $EXIT_PASS
 }
 
 # --- explain -----------------------------------------------------------------
+
+cmd_show() {
+  require_repo
+  resolve_python || { fail "inhousecode: Python 3 is required."; exit $EXIT_USAGE; }
+  local number="${1:-}" color="auto"
+  [ "$#" -gt 0 ] && shift
+  case "$number" in
+    ''|*[!0-9]*|0) fail "inhousecode: show needs a positive finding number."; exit $EXIT_USAGE ;;
+  esac
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --color)
+        shift
+        case "${1:-}" in auto|always|never) color="$1" ;;
+          *) fail "inhousecode: --color must be auto, always, or never."; exit $EXIT_USAGE ;;
+        esac
+        ;;
+      *) fail "inhousecode: unknown show option '$1'."; exit $EXIT_USAGE ;;
+    esac
+    shift
+  done
+  local briefing="$REPO_ROOT/.inhousecode/cache/last-briefing.md"
+  [ -s "$briefing" ] || {
+    fail "inhousecode: no findings briefing yet. Run 'inhousecode review' first."
+    exit $EXIT_USAGE
+  }
+  "${PYTHON_CMD[@]}" "$INHOUSECODE_HOME/lib/finding_view.py" \
+    --briefing "$briefing" --finding "$number" --color "$color"
+}
 
 # Standalone entry point for the developer who aborted and thought better of it.
 # It replays the last briefing rather than re-running the gates, so it costs
@@ -420,19 +617,163 @@ cmd_init() {
     cp "$INHOUSECODE_HOME/config/review.config.default.json" "$dir/config.json"
     good "inhousecode: wrote $dir/config.json"
   fi
-  if [ -f "$dir/developer-rulebook.md" ]; then
-    info "inhousecode: $dir/developer-rulebook.md already exists; leaving it alone."
-  else
-    cp "$INHOUSECODE_HOME/skills/code-review/references/developer-rulebook.md" \
-      "$dir/developer-rulebook.md"
-    good "inhousecode: wrote $dir/developer-rulebook.md - this is yours to edit."
+  load_config || exit $EXIT_USAGE
+  # shellcheck source=../lib/memory.sh
+  source "$INHOUSECODE_HOME/lib/memory.sh"
+  if [ "${INHOUSECODE_MEMORY_ENABLED:-1}" = "1" ]; then
+    memory_init || {
+      fail "inhousecode: OpenViking memory initialization failed; no local fallback was created."
+      exit $EXIT_USAGE
+    }
   fi
   if ! grep -qs '^\.inhousecode/cache/' "$REPO_ROOT/.gitignore"; then
     printf '\n# inhousecode scratch space\n.inhousecode/cache/\n' >> "$REPO_ROOT/.gitignore"
     good "inhousecode: ignored .inhousecode/cache/"
   fi
   say ""
-  say "Next: edit .inhousecode/developer-rulebook.md, then run 'inhousecode install-hooks'."
+  say "Next: add repository knowledge with 'inhousecode memory candidate add', then run 'inhousecode install-hooks'."
+  say "Or run 'inhousecode discover' to propose repository knowledge as candidates."
+}
+
+# --- memory --------------------------------------------------------------------
+
+cmd_memory() {
+  require_repo
+  load_config || exit $EXIT_USAGE
+  # shellcheck source=../lib/memory.sh
+  source "$INHOUSECODE_HOME/lib/memory.sh"
+
+  local sub="${1:-view}"
+  [ "$#" -gt 0 ] && shift
+  case "$sub" in
+    init) memory_init || exit $EXIT_USAGE ;;
+    candidate)
+      [ "${1:-}" = "add" ] && [ "$#" -ge 2 ] || {
+        fail "inhousecode: usage: memory candidate add <text> [--source <s>] [--evidence <file:line>]..."; exit $EXIT_USAGE;
+      }
+      shift
+      memory_candidate_add "$@" || exit $EXIT_USAGE
+      ;;
+    view) memory_run view "$@" || exit $EXIT_USAGE ;;
+    context) memory_run context "$@" || exit $EXIT_USAGE ;;
+    classify)
+      [ "$#" -ge 1 ] || { fail "inhousecode: memory classify needs a candidate ID."; exit $EXIT_USAGE; }
+      memory_classify "$@" || exit $EXIT_USAGE
+      ;;
+    promote)
+      [ "$#" -ge 1 ] || { fail "inhousecode: memory promote needs a candidate ID."; exit $EXIT_USAGE; }
+      memory_promote "$@" || exit $EXIT_USAGE
+      ;;
+    harvest) memory_harvest "$@" || exit $EXIT_USAGE ;;
+    schedule)
+      local action="${1:-status}"
+      [ "$#" -gt 0 ] && shift
+      case "$action" in
+        install)
+          "${PYTHON_CMD[@]}" "$INHOUSECODE_HOME/lib/harvest_schedule.py" install \
+            "$REPO_ROOT" "$INHOUSECODE_HOME/bin/inhousecode" "$@" || exit $EXIT_USAGE ;;
+        uninstall|status)
+          "${PYTHON_CMD[@]}" "$INHOUSECODE_HOME/lib/harvest_schedule.py" "$action" \
+            "$REPO_ROOT" "$@" || exit $EXIT_USAGE ;;
+        *) fail "inhousecode: usage: memory schedule install|uninstall|status"; exit $EXIT_USAGE ;;
+      esac
+      ;;
+    *) fail "inhousecode: unknown memory subcommand '$sub'."; exit $EXIT_USAGE ;;
+  esac
+}
+
+# --- harness-native command integrations -------------------------------------
+
+cmd_integrate() {
+  resolve_python || { fail "inhousecode: Python 3 is required for integrations."; exit $EXIT_USAGE; }
+  local action="${1:-status}" harness="${2:-all}"
+  case "$action" in
+    install|status|uninstall) ;;
+    *) fail "inhousecode: integrate action must be install, status, or uninstall."; exit $EXIT_USAGE ;;
+  esac
+  case "$harness" in
+    hermes|codex|all) ;;
+    *) fail "inhousecode: integrate harness must be hermes, codex, or all."; exit $EXIT_USAGE ;;
+  esac
+  local targets=() target
+  if [ "$harness" = "all" ]; then targets=(hermes codex); else targets=("$harness"); fi
+  for target in "${targets[@]}"; do
+    "${PYTHON_CMD[@]}" "$INHOUSECODE_HOME/lib/integrations.py" \
+      "$action" "$target" --source "$INHOUSECODE_HOME/skills/inhousecode" || exit $EXIT_USAGE
+  done
+}
+
+# --- discover --------------------------------------------------------------------
+#
+# A one-shot agent run that reads the repository -- its manifests, its linter
+# and CI config, its existing documentation, its directory layout -- and proposes
+# first pass at two things a blank .inhousecode/ leaves the team to write by
+# hand: which Semgrep packs actually fit this stack, and what durable facts
+# belong in team memory before the first real review ever runs.
+#
+# It never writes approved memory itself. It records candidate knowledge as
+# proposals, so a developer can evaluate and approve it later.
+cmd_discover() {
+  require_repo
+  load_config || exit $EXIT_USAGE
+  GATE_ONLY=0
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --gate) GATE_ONLY=1 ;;
+      -h|--help) usage; exit $EXIT_PASS ;;
+      *) fail "inhousecode: unknown option '$1'."; exit $EXIT_USAGE ;;
+    esac
+    shift
+  done
+
+  # shellcheck source=../lib/copilot.sh
+  source "$INHOUSECODE_HOME/lib/copilot.sh"
+  # shellcheck source=../lib/memory.sh
+  source "$INHOUSECODE_HOME/lib/memory.sh"
+  usage_reset
+  ensure_copilot || { fail "inhousecode: the AI harness is required for discover."; exit $EXIT_USAGE; }
+
+  local skill="$INHOUSECODE_HOME/skills/discovery/SKILL.md"
+  memory_init >/dev/null || {
+    fail "inhousecode: OpenViking memory is required for discovery."
+    exit $EXIT_USAGE
+  }
+
+  local mode_line
+  if [ "$GATE_ONLY" = "1" ]; then
+    mode_line="Report-only: do not write anything. Print candidate records under a PROPOSED CANDIDATE MEMORY heading."
+  else
+    mode_line="Record each repository fact as unverified candidate memory by running, once per fact, from a shell in $REPO_ROOT:
+  $INHOUSECODE_HOME/bin/inhousecode memory candidate add \"<candidate>\"
+Do not call OpenViking directly. Do not classify or promote candidates."
+  fi
+
+  step "Discovering this repository..."
+  local prompt
+  prompt="$(printf '%s\n' \
+    "You are onboarding inhousecode onto a repository for the first time. Read" \
+    "the repository at $REPO_ROOT and identify its languages, frameworks, package" \
+    "manager, test runner, linter/CI configuration, architecture, and existing" \
+    "README, CONTRIBUTING, AGENTS.md, CLAUDE.md, and Copilot instructions." \
+    "" \
+    "Reference material for this task: $skill" \
+    "" \
+    "$mode_line" \
+    "" \
+    "Human authorship does not prove correctness. Every discovered fact starts" \
+    "as candidate memory. Include repository evidence in your final summary." \
+    "" \
+    "When done, print a short summary of the stack and candidate records.")"
+
+  local log="$REPO_ROOT/.inhousecode/cache/discover-$$.log"
+  mkdir -p "$REPO_ROOT/.inhousecode/cache" 2>/dev/null
+  run_discover_agent "$prompt" "$log" "discover"
+  say ""
+  agent_text "$log"
+  say ""
+  print_usage_summary
+  rm -f "$log" 2>/dev/null
+  exit $EXIT_PASS
 }
 
 # --- hooks -------------------------------------------------------------------
@@ -545,10 +886,30 @@ cmd_doctor() {
   say "${C_BOLD}inhousecode $VERSION${C_RESET}  ($INHOUSECODE_HOME)"
   step "Environment"
 
+  # Load the install-wide default so the harness check works outside a repo.
+  if resolve_python; then
+    local _defaults
+    _defaults="$("${PYTHON_CMD[@]}" -c "
+import json, sys
+with open(sys.argv[1]) as f: cfg = json.load(f)
+print(cfg.get('harness', 'copilot'))
+" "$INHOUSECODE_HOME/config/review.config.default.json" 2>/dev/null)" || _defaults=""
+    INHOUSECODE_HARNESS="${INHOUSECODE_HARNESS:-${_defaults:-copilot}}"
+  else
+    INHOUSECODE_HARNESS="${INHOUSECODE_HARNESS:-copilot}"
+  fi
+
   local repo_root repo_rc
   repo_root="$(git rev-parse --show-toplevel 2>/dev/null)"
   repo_rc=$?
   check "git repository" "$repo_root" "$repo_rc"
+  if [ "$repo_rc" -eq 0 ]; then
+    REPO_ROOT="$repo_root"
+    export REPO_ROOT
+    # Resolve the harness from the repository config before checking it. The
+    # repository choice must be visible in doctor, not only during review.
+    load_config >/dev/null 2>&1 || true
+  fi
 
   if resolve_python; then
     check "python 3" "$(${PYTHON_CMD[*]} --version 2>&1)" 0
@@ -563,10 +924,10 @@ cmd_doctor() {
   fi
 
   local copilot
-  if copilot="$(resolve_copilot)"; then
-    check "Copilot CLI" "$copilot" 0
+  if copilot="$(resolve_harness)"; then
+    check "AI harness (${INHOUSECODE_HARNESS:-copilot})" "$copilot" 0
   else
-    check "Copilot CLI" "required for the AI gate and all repairs" 1
+    check "AI harness (${INHOUSECODE_HARNESS:-copilot})" "required for the AI gate and all repairs" 1
   fi
 
   if resolve_timeout; then
@@ -592,9 +953,23 @@ cmd_doctor() {
     step "Repository configuration"
     if load_config; then
       good "  Config resolved."
+      say "    harness: $INHOUSECODE_HARNESS"
+      say "    review : fixByDefault=$INHOUSECODE_REVIEW_FIX_BY_DEFAULT"
       say "    static : enabled=$INHOUSECODE_STATIC_ENABLED autofix=$INHOUSECODE_STATIC_AUTOFIX maxLoops=$INHOUSECODE_STATIC_MAX_FIX_LOOPS"
       say "    ai     : enabled=$INHOUSECODE_AI_ENABLED autofixBlocking=$INHOUSECODE_AI_AUTOFIX_BLOCKING triageFindings=$INHOUSECODE_AI_TRIAGE_FINDINGS"
-      say "    rulebook: $INHOUSECODE_RULEBOOK $([ -f "$REPO_ROOT/$INHOUSECODE_RULEBOOK" ] && echo '(present)' || echo '(using shipped default)')"
+      if [ "${INHOUSECODE_ADVERSARIAL_ENABLED:-0}" = "1" ]; then
+        say "    advers.: enabled model=${INHOUSECODE_ADVERSARIAL_MODEL:-<primary review model>} maxLenses=${INHOUSECODE_ADVERSARIAL_MAX_LENSES:-4}"
+      else
+        say "    advers.: disabled (enable in config or pass --adversarial)"
+      fi
+
+      # shellcheck source=../lib/memory.sh
+      source "$INHOUSECODE_HOME/lib/memory.sh"
+      if memory_run check >/dev/null 2>&1; then
+        good "    memory  : OpenViking healthy; shared namespace readable"
+      else
+        fail "    memory  : OpenViking unavailable or namespace unreadable (no local fallback)"
+      fi
     fi
     step "Installed triggers"
     [ -f "$REPO_ROOT/.githooks/pre-commit" ] &&
@@ -611,10 +986,14 @@ main() {
   [ "$#" -gt 0 ] && shift
   case "$command" in
     review)          cmd_review "$@" ;;
+    show)            cmd_show "$@" ;;
     explain)         cmd_explain "$@" ;;
     init)            cmd_init "$@" ;;
     install-hooks)   cmd_install_hooks "$@" ;;
     uninstall-hooks) cmd_uninstall_hooks "$@" ;;
+    memory)          cmd_memory "$@" ;;
+    integrate)       cmd_integrate "$@" ;;
+    discover)        cmd_discover "$@" ;;
     doctor)          cmd_doctor "$@" ;;
     version|--version|-v) say "inhousecode $VERSION" ;;
     help|--help|-h)  usage ;;

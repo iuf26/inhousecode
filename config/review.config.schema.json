@@ -5,6 +5,21 @@
   "additionalProperties": false,
   "properties": {
     "$schema": { "type": "string" },
+    "harness": {
+      "type": "string",
+      "enum": ["copilot", "claude-code", "codex", "hermes"],
+      "description": "Which AI CLI backend to use for the review, repair, and explain agents."
+    },
+    "review": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "fixByDefault": {
+          "type": "boolean",
+          "description": "Automatically repair all static and AI findings unless --no-fix is supplied."
+        }
+      }
+    },
     "triggers": {
       "type": "object",
       "additionalProperties": false,
@@ -63,6 +78,29 @@
         "model": { "type": "string" }
       }
     },
-    "rulebook": { "type": "string" }
+    "memory": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "contextMaxChars": { "type": "integer", "minimum": 500, "maximum": 20000 },
+        "recordSessions": { "type": "boolean" },
+        "autoPromoteAfterReviews": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100,
+          "not": { "const": 1 }
+        }
+      }
+    },
+    "adversarial": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "model": { "type": "string" },
+        "maxLenses": { "type": "integer", "minimum": 1, "maximum": 4 }
+      }
+    }
   }
 }

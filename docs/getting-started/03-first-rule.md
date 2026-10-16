@@ -1,67 +1,62 @@
-# 3. Write your first rule
+# 3. Add your first piece of team knowledge
 
-Don't design a rulebook. Write one rule — the one you're most tired of typing
-in review comments — and see it work. The rest accumulates on its own after
-that.
+Don't design a policy. Add one fact — the review comment you are most tired of
+typing — and watch it reach the reviewer.
 
-## Pick the rule
+## Pick it
 
-The best first rule is **a comment you've personally written more than
-twice**. That repetition is the whole signal: if it comes up again and
-again, it's worth a machine remembering it so you don't have to.
+The best first entry is **a comment you've written more than twice**, specific
+to this repository and checkable by reading code. For example: "payment retries
+must go through `with_idempotency_key()`" or "every SQL query filters by
+`tenant_id`."
 
-Something like "every query needs to filter by tenant" or "use the logging
-module, not `print()`" — concrete, checkable, specific to how your team
-actually works, not a general best practice a linter already covers.
+## Add it as a candidate
 
-## Write it
+Everything starts as a candidate, even when a human writes it. Authorship is
+provenance, not proof.
 
-Open `.inhousecode/developer-rulebook.md` and add one line:
-
-```markdown
-- id (scope) — the rule
+```bash
+inhousecode memory candidate add \
+  "Payment retries must go through with_idempotency_key()." \
+  --source developer-feedback \
+  --evidence payments/client.py:42
 ```
 
-- `id` — short, kebab-case, unique. The reviewer will cite this exact string
-  back to you on every finding, so `prefer-pathlib` is more useful than
-  `rule-1`.
-- `scope` — `all`, or a narrower area like `python`, `sql`, `tests`,
-  `frontend`. The rule only applies to matching files — nothing else goes
-  in this field.
-- the rule itself — one imperative sentence you could check by eye. Blocking
-  (**HIGH**) by default. End the line with `(MEDIUM)` or `(LOW)` if it should
-  be flagged but never block a commit — a good default while you're still
-  finding your footing.
+The command prints a candidate ID and the exact OpenViking URI it wrote and read
+back.
 
-A real first line:
+## Classify it
 
-```markdown
-- tenant-scoped-queries (sql) — every query filters by tenant_id
+```bash
+inhousecode memory classify <candidate-id> \
+  --target project --confidence high \
+  --evidence payments/client.py:42
 ```
+
+A repository-local, high-confidence, evidenced, non-security fact is promoted
+to project knowledge automatically. Anything global, security-related, about
+reviewer behavior, conflicting, or weakly evidenced stays classified until a
+human runs `inhousecode memory promote`. The original candidate is kept either
+way.
 
 ## See it fire
 
-Change some code that breaks the rule, then:
+Change some code that breaks the fact, then:
 
 ```bash
 inhousecode review --worktree
 ```
 
-The finding will now cite your rule by name and quote it back to you — not
-a generic "this looks risky," but "this violates `tenant-scoped-queries`:
-every query filters by tenant_id," pointed at the exact line.
+The reviewer receives the promoted record (with its stable URI and the snapshot
+hash) and can cite it on the finding instead of giving generic advice.
 
-## Keep going, slowly
+Check what the team knows at any time:
 
-Add rules the same way, one at a time, as you notice yourself repeating a
-comment. Leave everything `(MEDIUM)` or `(LOW)` until you've watched it fire
-correctly a few times — the full approach to promoting rules to blocking,
-and to rolling this out to a whole team without it getting disabled in week
-two, is in [docs/team-customization.md](../team-customization.md).
+```bash
+inhousecode memory view --prompt "What do we know about payment retries?"
+```
 
 ## Next
 
-The rulebook only helps if it actually runs. Right now you're still typing
-`inhousecode review` by hand — page 4 wires it into `git commit` or your
-agent's stop event so it runs on its own:
-[Turn on the hook](04-turn-on-the-hook.md).
+Knowledge only helps if review actually runs. Page 4 wires it into
+`git commit` or your agent's stop event: [Turn on the hook](04-turn-on-the-hook.md).

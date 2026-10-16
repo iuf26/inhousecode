@@ -18,3 +18,12 @@ If you just want the "why" before any of this, read
 instead of the guided version, the [README](../../README.md) and
 [docs/configuration.md](../configuration.md) /
 [docs/team-customization.md](../team-customization.md) have it.
+
+Page 2 also introduces `inhousecode discover`, which proposes candidate
+knowledge from the repository. Durable knowledge is stored only in OpenViking;
+`.inhousecode/` contains configuration and transient cache, never memory
+records.
+
+Page 5 also introduces **adversarial review** (`inhousecode review --pr N
+--adversarial`) — the deeper, multi-lens pass you run on a whole pull request
+before it merges, as the counterpart to the fast commit-time gate.

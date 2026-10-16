@@ -89,32 +89,21 @@ resolve_timeout() {
   return 1
 }
 
-# Locate the Copilot CLI. VS Code ships an internal copy that cannot run
-# headless prompts, so entries under its globalStorage are skipped.
-resolve_copilot() {
-  if [ -n "${COPILOT_BIN:-}" ] && [ -x "${COPILOT_BIN}" ]; then
-    printf '%s\n' "${COPILOT_BIN}"
-    return 0
-  fi
-  local candidate
-  while IFS= read -r candidate; do
-    [ -n "$candidate" ] || continue
-    case "$candidate" in
-      *globalStorage/github.copilot-chat/*) continue ;;
-    esac
-    printf '%s\n' "$candidate"
-    return 0
-  done < <(type -ap copilot 2>/dev/null)
-
-  local base="${LOCALAPPDATA:-$HOME/AppData/Local}"
-  base="${base//\\//}"
-  for candidate in \
-    "$base/Microsoft/WinGet/Packages/GitHub.Copilot_Microsoft.Winget.Source_8wekyb3d8bbwe/copilot.exe" \
-    "$base/Microsoft/WinGet/Packages/GitHub.Copilot.Prerelease_Microsoft.Winget.Source_8wekyb3d8bbwe/copilot.exe"; do
-    [ -x "$candidate" ] && { printf '%s\n' "$candidate"; return 0; }
-  done
-  return 1
+# Locate the active harness CLI binary. Delegates to lib/harness.sh, which
+# selects the adapter for INHOUSECODE_HARNESS (default: copilot) and resolves
+# its binary. resolve_copilot() is kept as a backward-compatible alias.
+#
+# Not itself named resolve_harness_bin: lib/harness.sh defines a function of
+# that exact name (the real public API, which loads the adapter first) and
+# sourcing it from inside a same-named function here would redefine the
+# function out from under its own still-running invocation.
+resolve_harness() {
+  # shellcheck source=harness.sh
+  source "$INHOUSECODE_HOME/lib/harness.sh"
+  resolve_harness_bin
 }
+
+resolve_copilot() { resolve_harness; }
 
 # --- configuration -----------------------------------------------------------
 

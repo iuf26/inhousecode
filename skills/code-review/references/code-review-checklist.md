@@ -14,22 +14,22 @@ what the change is trying to do.
 - [Tests](#tests)
 - [Severity guidance](#severity-guidance)
 
-**The team rulebook comes first.** Concrete, citable rules live in
-`developer-rulebook.md` (handed to you directly alongside this file); check
-those first. This checklist adds the judgment dimensions that are not fixed
-rules — correctness edge cases, design cohesion, contract stability, test
-adequacy — plus the single severity scale every finding uses.
+**Approved review knowledge comes first.** The caller supplies a frozen,
+scope-filtered OpenViking snapshot. This checklist adds the judgment dimensions
+that are not stored repository facts — correctness edge cases, design cohesion,
+contract stability, and test adequacy — plus the severity scale.
 
-**Precedence:** when a checklist prompt overlaps a rulebook rule, the **rulebook
-wins**. Cite its `id`, use its severity, and do not report the issue twice. Use
-this checklist's scale only for findings with no matching rulebook `id`.
+**Precedence:** built-in safety and this review contract cannot be overridden.
+Within contextual knowledge, approved project records override approved global
+records. Candidate evidence is unverified and never overrides either. Cite the
+stable record ID when approved knowledge applies, and do not report twice.
 
 **A static scanner already ran.** Do not re-report pattern-matchable lint. Every
 finding here should be something that required reading and understanding the
 code.
 
-Cite the category name below as the finding `category` (or the rulebook `id`
-when a rule applies).
+Cite the category name below as the finding `category` (or the stable approved
+memory record ID when one applies).
 
 ## Correctness
 
@@ -37,8 +37,8 @@ when a rule applies).
 - Unhandled edge cases: empty input, null/None, zero, negative, very large values.
 - Race conditions, unsafe concurrency, shared mutable state.
 - Resource leaks: files, sockets, locks, or handles not closed or released.
-- Incorrect error propagation beyond the rulebook's `error-handling` rule: the
-  wrong error type raised, or an error caught and silently downgraded.
+- Incorrect error propagation: the wrong error type raised, or an error caught
+  and silently downgraded.
 
 ## Design & maintainability
 
@@ -46,8 +46,8 @@ when a rule applies).
 - Separation of concerns: business logic is not tangled with I/O or presentation.
 - Consistent return shapes: predictable structures, not ad-hoc dictionaries.
 - No dead code, commented-out blocks, or leftover debug statements.
-- Naming and duplication belong to the rulebook (`readable-names`,
-  `no-duplication`) — cite those `id`s instead of re-reporting here.
+- Naming and duplication matter when they create a concrete maintenance or
+  correctness cost; do not report personal style preferences.
 
 ## AI-generated code smells
 
@@ -81,13 +81,12 @@ them accordingly.
 
 - Public signatures are stable, documented, and backward compatible unless the
   change intentionally breaks them — and that is called out.
-- Inputs are validated at the boundary (rulebook `input-validation`); outputs
-  match the documented contract.
+- Inputs are validated at the boundary; outputs match the documented contract.
 - Changes to shared modules account for all existing callers.
 
 ## Security
 
-Apply the rulebook's `no-secrets` rule first, then reason independently about:
+Reason about:
 
 - Injection: SQL, command, KQL, or template strings built from unsanitized input.
 - Unsafe `eval`/`exec`/deserialization, or `subprocess(..., shell=True)` on
@@ -103,18 +102,15 @@ Apply the rulebook's `no-secrets` rule first, then reason independently about:
 
 ## Severity guidance
 
-The single scale for all findings, checklist and rulebook alike:
+The single scale for all findings:
 
 - **CRITICAL** — exploitable vulnerability, data loss, or a bug guaranteed to
   break production.
-- **HIGH** — likely-incorrect behavior, a violated rulebook rule, or a security
-  weakness.
+- **HIGH** — likely-incorrect production behavior or a security weakness.
 - **MEDIUM** — a maintainability or design smell that should be fixed but does
   not block.
 - **LOW** — a minor nit or style suggestion.
 
-A violated rulebook rule takes its severity from the rulebook (**HIGH** by
-default, or the `(MEDIUM)`/`(LOW)` the rule itself declares — never CRITICAL).
 CRITICAL and HIGH block; MEDIUM and LOW do not.
 
 **When in doubt, go lower.** A gate that blocks on opinions gets disabled, and a

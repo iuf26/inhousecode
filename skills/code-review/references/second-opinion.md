@@ -46,7 +46,7 @@ throw away a real concern. The critic flags these and stops there.
 | `WRONG-LINE` | The cited `file:line` does not contain the code described. |
 | `WRONG-SEVERITY` | The severity does not follow from the mechanism, and the fix is not simply "lower it". |
 | `UNPROVEN` | The mechanism is asserted rather than demonstrated, but may be real once grounded. |
-| `MISCATEGORIZED` | The category or rulebook rule id does not match the defect. |
+| `MISCATEGORIZED` | The category or approved memory record ID does not match the defect. |
 | `DUPLICATE` | Two findings describe one defect; name the origin. |
 | `VAGUE-FIX` | The fix is not a specific, imperative, single action. |
 

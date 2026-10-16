@@ -17,15 +17,25 @@ Start with whichever of these matches what you're trying to do.
 | | |
 |---|---|
 | [getting-started/](getting-started/) | Five short pages: install → first review → first rule → hook → team rollout |
+| [client-trial.md](client-trial.md) | A 90-minute guided trial on your own repository, showing the value of each feature |
 | [installation.md](installation.md) | Full install reference: Windows, hook internals, uninstalling |
 | [usage.md](usage.md) | Every `review` flag, reviewing a PR, fixing a branch that isn't yours |
+| [harness-commands.md](harness-commands.md) | Invoke inhousecode as `/inhousecode` in Hermes or `$inhousecode` in Codex |
 | [configuration.md](configuration.md) | Every option in `.inhousecode/config.json`, and what it costs you |
 
 ## Make it yours
 
 | | |
 |---|---|
-| [team-customization.md](team-customization.md) | Writing the rulebook, `AGENTS.md` context, rolling out to a team |
+| [team-customization.md](team-customization.md) | Governed team knowledge, `AGENTS.md` context, and repair rollout |
+
+## Team memory
+
+`inhousecode discover` and `inhousecode memory` use OpenViking as the only
+persistent memory store. Candidate memory, promoted project knowledge, global
+knowledge, review snapshots, expiry, and promotion metadata are stored under
+`viking://resources/inhousecode/memory-policy/`. See
+[memory-policy.md](memory-policy.md).
 
 ## Verify it
 
@@ -41,7 +51,7 @@ doc you're in — this is the mapping:
 | Term | Refers to |
 |---|---|
 | Phase 1 / static / the static gate | Semgrep, the deterministic floor |
-| Phase 2 / AI / the AI review | The model reading the diff and your rulebook |
+| Phase 2 / AI / the AI review | The model reading the diff and a frozen governed-knowledge snapshot |
 | The gate | Either phase, or the pipeline as a whole — context disambiguates |
 
 ---

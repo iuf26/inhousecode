@@ -1,113 +1,94 @@
 # Making it your team's reviewer
 
-A general-purpose reviewer catches general-purpose problems. The reason your
-senior engineers are valuable in review is that they know things this repository
-never wrote down.
+A general reviewer catches general problems. inhousecode becomes team-specific
+through governed OpenViking knowledge, repository context, and deterministic
+Semgrep packs.
 
-There are three places to write those things down.
+## 1. Governed team knowledge
 
-## 1. The team rulebook — start here
+OpenViking is the only persistent memory store. Active records live under:
 
-`.inhousecode/developer-rulebook.md`, created by `inhousecode init`. Plain
-markdown, owned by the team, re-read on **every** review. The agent never edits
-it.
-
-One line per rule:
-
-```
-- id (scope) — the rule
+```text
+viking://resources/inhousecode/memory-policy/
 ```
 
-| Part | What it is |
-|---|---|
-| `id` | Short, kebab-case, unique. The reviewer cites it verbatim, so `prefer-pathlib` beats `rule12`. |
-| `scope` | `all`, or an area: `python`, `bash`, `sql`, `tests`, `frontend`. Applied only to matching files — nothing else goes in this field. |
-| the rule | One imperative, checkable sentence. Blocking (**HIGH**) by default. End the line with `(MEDIUM)` or `(LOW)` to report without blocking — same severities findings already use. `(CRITICAL)` isn't allowed here; that's reserved for what the reviewer finds on its own. |
+Feedback never becomes policy immediately. Add it as a candidate, classify it,
+and promote it only when the evidence and scope are clear:
 
+```bash
+inhousecode memory candidate add \
+  "Every payment write retry uses an idempotency key." \
+  --source developer-feedback --evidence payments/client.py:42
+
+inhousecode memory classify <candidate-id> --target project \
+  --confidence high --evidence payments/client.py:42
 ```
-- tenant-scoped-queries (sql) — every query filters by tenant_id
-- no-print-logging (python) — use the logging module, not print(), in library code
-- pin-versions (scripts) — pin dependency versions; do not install from latest
-- docstring-public-fns (python) — public functions have a short docstring (LOW)
-```
 
-### What belongs here
+Safe, well-evidenced repository facts may promote automatically. Global,
+cross-repository, security-sensitive, conflicting, suppression-oriented, and
+review-behavior changes require a human promotion decision. The original
+candidate remains available after promotion.
 
-A rule earns its place when it is **general and repeatable** — something you'd
-want flagged on *any* future change.
+Good knowledge is specific and testable:
 
-Good sources, in order of value:
+- Every query in the billing service filters by `tenant_id`.
+- Payment write retries use `with_idempotency_key()`.
+- Public API errors use the repository's `ProblemDetails` shape.
 
-1. **A review comment you have written more than twice.** That is the definition
-   of a rule.
-2. **A postmortem.** Whatever caused the incident, write the rule that would have
-   caught it.
-3. **Tribal knowledge.** "Never call that service synchronously." "This module is
-   load-bearing; changes need a test." Things a new hire learns by breaking them.
-4. **A house convention that genuinely matters.** Not formatting — a formatter
-   handles that, and formatting never blocks a commit here.
+Avoid vague preferences such as “write clean code.” If a linter or Semgrep rule
+can enforce the requirement deterministically, use that instead.
 
-### What doesn't
+Use `inhousecode memory view --prompt "<question>"` to inspect the project,
+global, and candidate records available to the current repository. See
+[memory-policy.md](memory-policy.md) for lifecycle and trust rules.
 
-- Anything a linter or formatter already enforces. Wasted tokens.
-- Vague aspirations. "Write clean code" is unfalsifiable, so the reviewer will
-  either ignore it or invent violations of it.
-- Anything Semgrep catches. Phase 1 already ran.
+## 2. Repository context
 
-### Severity, honestly
-
-A violated rule is **HIGH** and blocks by default. Mark it `(MEDIUM)` or
-`(LOW)` to report without blocking. Style and convention rules cap at
-**MEDIUM** regardless of what you write.
-
-Be conservative. Every rule you leave at HIGH is a commit someone can't make. A
-gate that blocks on taste gets uninstalled, and an uninstalled gate reviews
-nothing.
-
-Start at `(MEDIUM)` or `(LOW)`. Promote a rule to HIGH once you've seen it
-fire correctly a few times.
-
-## 2. Repository context — `AGENTS.md`
-
-The reviewer reads your repository's `AGENTS.md` (or `CLAUDE.md` /
-`.github/copilot-instructions.md`) for context: what this repo is, what the
-domain means, which directories are generated, what "done" looks like here.
-
-The rulebook says what must hold. `AGENTS.md` says what the code *is*. A reviewer
-with both stops reporting deliberate design decisions as defects.
+The reviewer reads `AGENTS.md`, `CLAUDE.md`, or
+`.github/copilot-instructions.md` as repository context: architecture, domain
+terms, generated directories, test commands, and what “done” means. This
+context helps the reviewer understand the code, but it does not bypass the
+OpenViking candidate and promotion workflow for durable review policy.
 
 ## 3. Semgrep packs
 
 `static.semgrepConfigs` controls Phase 1. The defaults are security-focused.
-Teams with a shared internal ruleset can point at their own packs.
+Teams with internal Semgrep rules can add those packs or repository paths.
+Only configure sources that resolve successfully: one invalid `--config` makes
+the static scan unavailable rather than silently dropping part of the floor.
 
-Only list packs that exist in the registry — a `--config` that 404s makes Semgrep
-exit non-zero and the whole scan is discarded and reported as unavailable.
+## Repair policy
 
-## Rolling it out
+Start report-only:
 
-1. **Ship it read-only.** `static.autofix: false`, `ai.autofixBlocking: false`.
-   Let the team see findings for a week without anything changing under them.
-2. **Collect the disagreements.** Every "that's wrong" is either a bad rule or a
-   missing piece of context. Both are fixable, and both make the next week
-   quieter.
-3. **Turn on static repair.** Deterministic findings, deterministic fixes. This
-   is where the time savings show up first.
-4. **Turn on blocking review repair.** By now the rulebook reflects the team and
-   the false-positive rate is low enough to trust.
-5. **Then consider agent-stop.** Once people trust the gate at commit time, move
-   it earlier — to the moment the code is generated.
+```json
+{
+  "review": { "fixByDefault": false },
+  "static": { "autofix": false },
+  "ai": { "autofixBlocking": false }
+}
+```
 
-Do not start at step 5. A gate that interrupts every agent turn before the team
-believes in it is a gate that gets deleted.
+After the team trusts the findings, enable deterministic static repair, then
+blocking AI repair. Enable all-finding repair only as a deliberate final step:
+
+```json
+{
+  "review": { "fixByDefault": true }
+}
+```
+
+`--no-fix` always disables repair for one run, even when the repository default
+is enabled. `--fix` enables all-finding repair for one run. Every repair is
+bounded and re-reviewed; fixer agents never commit or push.
 
 ## Sharing across repositories
 
-Commit `.inhousecode/config.json` and `.inhousecode/developer-rulebook.md`.
-They belong in version control; that is the point.
+Commit `.inhousecode/config.json` when the team should share the same review
+settings. Do not store memory records in the repository. Point each developer's
+`ov` CLI at the same OpenViking service. Repository knowledge stays scoped to
+its repository identity; approved global knowledge can apply across
+repositories.
 
-For an organization-wide baseline, keep the rulebook in one repository and either
-vendor it in, or point `rulebook` at a path your build populates. Teams then
-append their own rules below the shared block.
-
-`.inhousecode/cache/` is scratch space and is git-ignored by `init`.
+`.inhousecode/cache/` is transient review data and is ignored by `inhousecode
+init`.

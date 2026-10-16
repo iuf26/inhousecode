@@ -125,11 +125,15 @@ pr_head_from_local() {
 }
 
 pr_resolve_github() {
-  local document args=()
+  local document
   command -v gh >/dev/null 2>&1 || return 1
-  [ -n "$PR_REPO_SLUG" ] && args=(-R "$PR_REPO_SLUG")
-  document="$(gh pr view "$PR_ID" "${args[@]}" \
-    --json baseRefName,headRefName,headRefOid,title,url,body 2>/dev/null)" || return 1
+  if [ -n "$PR_REPO_SLUG" ]; then
+    document="$(gh pr view "$PR_ID" -R "$PR_REPO_SLUG" \
+      --json baseRefName,headRefName,headRefOid,title,url,body 2>/dev/null)" || return 1
+  else
+    document="$(gh pr view "$PR_ID" \
+      --json baseRefName,headRefName,headRefOid,title,url,body 2>/dev/null)" || return 1
+  fi
   [ -n "$document" ] || return 1
 
   PR_BASE_BRANCH="$(printf '%s' "$document" | pr_json_field baseRefName)"

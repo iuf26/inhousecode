@@ -10,6 +10,7 @@ Total time: ~10 minutes, most of it waiting on two model calls.
 - [1. Environment](#1-environment)
 - [2. Phase 1 alone — report only](#2-phase-1-alone--report-only)
 - [3. The repair loop](#3-the-repair-loop)
+- [3b. Fix-by-default and override precedence](#3b-fix-by-default-and-override-precedence)
 - [4. Phase 2 alone — the reviewer](#4-phase-2-alone--the-reviewer)
 - [5. The finding picker](#5-the-finding-picker)
 - [5b. The explain handoff](#5b-the-explain-handoff)
@@ -28,8 +29,11 @@ Set these once per shell, pointing at wherever you keep the two checkouts:
 
 ```bash
 INHOUSECODE=~/src/inhousecode        # this repository
-DEMO=~/src/inhousecode-demo          # a scratch repo seeded with real defects
+DEMO=~/projects/code-sentinel-demo   # the demo repo: one service seeded with real defects
 ```
+
+The demo repository is described in
+[client-trial.md](client-trial.md#trying-it-on-the-demo-repository).
 
 Every step below is written against those two variables, so nothing else in this
 page needs editing.
@@ -56,7 +60,7 @@ Then confirm the config resolver renders shell assignments:
 python lib/config.py . .
 ```
 
-**Expect:** ~19 `INHOUSECODE_*=...` lines, starting `INHOUSECODE_TRIGGERS_PRE_COMMIT=1`.
+**Expect:** `INHOUSECODE_*=...` lines, starting `INHOUSECODE_HARNESS=copilot`.
 A traceback here means `config.py`, `review.config.default.json`, and
 `review.config.schema.json` have drifted apart.
 
@@ -69,13 +73,15 @@ cd "$DEMO"
 bash "$INHOUSECODE/bin/inhousecode" doctor
 ```
 
-**Expect:** `OK` on git repository, python 3, semgrep, Copilot CLI, timeout.
+**Expect:** `OK` on git repository, python 3, semgrep, AI harness, timeout.
 
 Two failures worth knowing:
 
-- **Copilot CLI resolves to a path containing `globalStorage/github.copilot-chat`.**
-  That is VS Code's internal copy and it cannot run headless. `resolve_copilot`
-  is supposed to skip it. If `doctor` reports that path, the skip is broken.
+- **The configured harness resolves to a path containing
+  `globalStorage/github.copilot-chat`.** That is VS Code's internal Copilot
+  copy and it cannot run headless. `harness_resolve_bin` in
+  `lib/harness_copilot.sh` is supposed to skip it. If `doctor` reports that
+  path, the skip is broken.
 - **`python3` not found but `python` works.** Expected on Windows, where the
   Python launcher installs as `python`, not `python3`. `resolve_python` probes
   with `-c` rather than `command -v` for exactly this reason.
@@ -162,6 +168,27 @@ rm src/scratch.py
 git checkout -- AGENTS.md
 ```
 
+## 3b. Fix-by-default and override precedence
+
+Use a disposable trial branch. Set `review.fixByDefault` to `true`, create one
+static and one AI-review defect, and run each supported target. Confirm a fixer
+runs for staged, worktree, path, and a checked-out diff/PR head. A diff or PR
+whose reviewed commit is not checked out must warn and stay report-only.
+
+Then record the tree hash and run both flag orders:
+
+```bash
+git status --porcelain=v1 > /tmp/inhousecode-before.txt
+inhousecode review --worktree --fix --no-fix --gate || true
+inhousecode review --worktree --no-fix --fix --gate || true
+git status --porcelain=v1 > /tmp/inhousecode-after.txt
+cmp /tmp/inhousecode-before.txt /tmp/inhousecode-after.txt
+```
+
+**Expect:** both runs are report-only and `cmp` exits 0. `--no-fix` has
+precedence regardless of order. Set `review.fixByDefault` back to `false` after
+the check.
+
 ---
 
 ## 4. Phase 2 alone — the reviewer
@@ -174,12 +201,11 @@ bash "$INHOUSECODE/bin/inhousecode" review --path src --mode ai --no-fix --gate
 echo "EXIT=$?"
 ```
 
-**Expect:** ~16 findings, ~11 blocking, `EXIT=1`. Verify three things:
+**Expect:** findings and a blocking exit for the seeded defects. Verify three things:
 
-1. **Rulebook ids appear in the CATEGORY column** — `no-secrets`,
-   `parameterized-sql`, `no-broad-except`, `small-functions`, `input-validation`.
-   Generic categories only, with no ids, means the reviewer never read
-   `.inhousecode/developer-rulebook.md`.
+1. **Promoted knowledge is attributed.** A finding caused by a promoted project
+   or global record names that rule and provenance. Built-in findings say
+   `built-in AI review guidance`; they must not pretend to use memory.
 2. **The SQL injection on `src/user_service.py:20` is reported.** Semgrep misses
    it. If Phase 2 misses it too, nothing is covering it.
 3. **Severity split is sane** — CRITICAL/HIGH for injection, secrets, and
@@ -258,9 +284,8 @@ cat .inhousecode/cache/last-briefing.md
 ```
 
 **Expect:** `explain` refuses to launch, prints the briefing path, and exits 0.
-The briefing lists every finding with its severity, the rule it violates, and a
-numbered source excerpt with `>` on the offending line. Any finding whose
-category matches a rulebook id quotes that rulebook line **verbatim**.
+The briefing lists every finding with its severity, the applicable rule and
+provenance, and a numbered source excerpt with `>` on the offending line.
 
 The briefing must exist even though `--gate` never prompted. Then confirm a
 clean run clears it:
@@ -288,11 +313,11 @@ were never reviewed.
 
 **The session (needs a real terminal):** re-run a blocking review and press `e`.
 
-**Expect:** a Copilot session opens; its first turn is one short block per
-finding (one sentence per field, no preamble, no closing summary) and it ends by
-asking which to fix. It edits nothing until you answer. On exit, inhousecode
-reports blocked and asks you to re-run — even if the session fixed everything,
-because nothing has re-reviewed those edits.
+**Expect:** an interactive session opens in your configured harness; its first
+turn is one short block per finding (one sentence per field, no preamble, no
+closing summary) and it ends by asking which to fix. It edits nothing until
+you answer. On exit, inhousecode reports blocked and asks you to re-run — even
+if the session fixed everything, because nothing has re-reviewed those edits.
 
 With `explain.enabled: false`, the `[e]` option must disappear from both the
 blocked prompt and the finding picker, and `inhousecode explain` must refuse.
@@ -456,7 +481,8 @@ Three properties that must hold for both:
 
 - **Merge base, not base tip.** Commit something on `$BASE` after branching; the
   next run must not attribute it to the branch under review.
-- **Report-only by default.** No file is edited without `--fix`, and `--fix` is
+- **Report-only by default.** No file is edited without `--fix` or
+  `review.fixByDefault: true`; explicit `--no-fix` overrides both. Repair is
   refused outright when the reviewed commit is not checked out.
 - **The AI gate reads the reviewed commit.** With a PR that is not checked out,
   `.inhousecode/cache/run-*/review-tree` must contain the PR's version of each
@@ -478,16 +504,16 @@ bash "$INHOUSECODE/bin/inhousecode" uninstall-hooks
 bash "$INHOUSECODE/bin/inhousecode" doctor | tail -4   # both "not installed"
 ```
 
-Also confirm `init` never destroys work:
+Also confirm `init` never destroys repository configuration:
 
 ```bash
-echo '- my-rule (all) — a rule I wrote' >> .inhousecode/developer-rulebook.md
+cp .inhousecode/config.json /tmp/inhousecode-config-before.json
 bash "$INHOUSECODE/bin/inhousecode" init
-grep -c my-rule .inhousecode/developer-rulebook.md   # expect: 1
+cmp .inhousecode/config.json /tmp/inhousecode-config-before.json
 ```
 
-**Expect:** `already exists; leaving it alone.` A rulebook is a team asset and
-`init` must be safe to re-run.
+**Expect:** `already exists; leaving it alone.` and `cmp` exits 0. Memory records
+live in OpenViking and must not be recreated under `.inhousecode/`.
 
 ---
 
@@ -532,7 +558,7 @@ perl -pi -e 's/\r\n/\n/' bin/inhousecode lib/*.sh lib/*.py hooks/*.sh install.sh
 | Scan → contract → render | 2 |
 | Static repair loop | 3 |
 | House style honored by fixers (`craft_standard`) | 3 |
-| AI review, rulebook, contract | 4 |
+| AI review, governed memory, contract | 4 |
 | Interactive finding triage | 5 |
 | Explain briefing, staged excerpts, session handoff | 5b |
 | Pre-commit, restaging, bypass | 6 |
@@ -541,6 +567,8 @@ perl -pi -e 's/\r\n/\n/' bin/inhousecode lib/*.sh lib/*.py hooks/*.sh install.sh
 | Installers, `init` safety | 9 |
 
 Not covered by this path: `install.ps1` and the `inhousecode.cmd` shim, macOS
-and Linux (`gtimeout`, `python3`), and Semgrep pack availability changes — a
+and Linux (`gtimeout`, `python3`), Semgrep pack availability changes — a
 `--config` pointing at a pack that has been removed from the registry makes
-Semgrep exit non-zero and discards the entire scan.
+Semgrep exit non-zero and discards the entire scan — the `claude-code` and
+`hermes` harness adapters (this path was written and run against `copilot`
+only), and `inhousecode discover` / `inhousecode memory`.

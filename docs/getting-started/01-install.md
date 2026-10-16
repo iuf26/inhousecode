@@ -24,8 +24,25 @@ git clone https://github.com/iuf26/inhousecode.git && cd inhousecode
 bash install.sh --with-semgrep          # macOS / Linux / Git Bash
 ```
 
+The installer will ask you to pick an AI CLI backend:
+
+```
+  Which AI CLI do you want inhousecode to use as its backend?
+
+    [1] copilot      — GitHub Copilot CLI  (copilot)
+    [2] claude-code  — Anthropic Claude Code CLI  (claude)
+    [3] hermes       — Hermes / Claude Code  (hermes or claude)
+
+  Pick a number [1]:
+```
+
+Or pass it directly: `bash install.sh --harness claude-code --with-semgrep`.
+Add `--fix-by-default` only if you want every review to repair all findings;
+the installer otherwise leaves this safe opt-in disabled.
+
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\install.ps1 -WithSemgrep   # Windows
+# Add -FixByDefault to opt into all-finding repair.
 ```
 
 This writes a small launcher onto your `PATH` (`inhousecode`) that execs

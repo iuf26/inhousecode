@@ -54,6 +54,13 @@ class ReadEventsTests(unittest.TestCase):
 
 
 class ExtractTextTests(unittest.TestCase):
+    def test_codex_agent_message_is_the_final_answer(self):
+        events = [
+            {"type": "item.completed", "item": {"type": "command_execution", "text": "ignored"}},
+            {"type": "item.completed", "item": {"type": "agent_message", "text": "CODE-REVIEW: PASS"}},
+        ]
+        self.assertEqual(usage.extract_text(events), "CODE-REVIEW: PASS")
+
     def test_prefers_final_answer_phase(self):
         events = [
             {"type": "assistant.message", "data": {"content": "thinking...", "phase": "draft"}},
@@ -98,26 +105,31 @@ class ExtractUsageTests(unittest.TestCase):
             {"type": "session.usage_checkpoint", "data": {"totalNanoAiu": 1000, "totalPremiumRequests": 1}},
             {"type": "session.usage_checkpoint", "data": {"totalNanoAiu": 2500, "totalPremiumRequests": 3}},
         ]
-        nano, premium = usage.extract_usage(events)
+        nano, premium, usd = usage.extract_usage(events)
         self.assertEqual(nano, 2500)
         self.assertEqual(premium, 3)
+        self.assertEqual(usd, 0.0)
 
     def test_result_event_premium_requests_contributes(self):
         events = [
             {"type": "session.usage_checkpoint", "data": {"totalPremiumRequests": 1}},
             {"type": "result", "usage": {"premiumRequests": 4}},
         ]
-        _, premium = usage.extract_usage(events)
+        _, premium, _ = usage.extract_usage(events)
         self.assertEqual(premium, 4)
 
     def test_missing_fields_default_to_zero(self):
         events = [{"type": "session.usage_checkpoint", "data": {}}]
-        nano, premium = usage.extract_usage(events)
-        self.assertEqual((nano, premium), (0, 0))
+        nano, premium, usd = usage.extract_usage(events)
+        self.assertEqual((nano, premium, usd), (0, 0, 0.0))
 
     def test_no_usage_events_returns_zero(self):
         events = [{"type": "assistant.message", "data": {"content": "hi"}}]
-        self.assertEqual(usage.extract_usage(events), (0, 0))
+        self.assertEqual(usage.extract_usage(events), (0, 0, 0.0))
+
+    def test_result_event_reports_cli_supplied_usd_cost(self):
+        events = [{"type": "result", "total_cost_usd": 1.25}]
+        self.assertEqual(usage.extract_usage(events), (0, 0, 1.25))
 
 
 class MainIntegrationTests(unittest.TestCase):
@@ -154,13 +166,13 @@ class MainIntegrationTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(out, "verdict: pass")
 
-    def test_usage_mode_prints_tab_separated_nano_and_premium(self):
+    def test_usage_mode_prints_tab_separated_nano_premium_and_usd(self):
         path = self._write_log(
             {"type": "session.usage_checkpoint", "data": {"totalNanoAiu": 42, "totalPremiumRequests": 2}}
         )
         exit_code, out = self._run(["--log", path, "--mode", "usage"])
         self.assertEqual(exit_code, 0)
-        self.assertEqual(out.strip(), "42\t2")
+        self.assertEqual(out.strip(), "42\t2\t0.0")
 
     def test_missing_log_file_returns_error_exit_code(self):
         exit_code, _ = self._run(["--log", "/nonexistent/path.jsonl", "--mode", "text"])

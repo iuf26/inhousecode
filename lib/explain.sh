@@ -10,8 +10,8 @@
 #
 # Two halves, and the split is the point:
 #
-#   the briefing   deterministic. Built here, from gate output, the rulebook,
-#                  and the reviewed source. No model involved, so it is worth
+#   the briefing   deterministic. Built here from gate output and the reviewed
+#                  source. No model involved, so it is worth
 #                  reading even when no session is ever launched.
 #   the session    interactive, developer-driven, write-enabled only with the
 #                  developer's own approval.
@@ -53,6 +53,21 @@ explain_persist_briefing() {
   return 0
 }
 
+# Print the deterministic briefing as part of the normal review result. A real
+# terminal gets ANSI highlighting; captured harness output gets the visible red
+# marker, so the offending line is never reduced to a file:line summary.
+explain_print_finding_details() {
+  local color="${1:-auto}" briefing
+  briefing="$(explain_briefing_path)"
+  [ -s "$briefing" ] || return 0
+  printf '\nFinding details:\n\n'
+  if ! "${PYTHON_CMD[@]}" "$INHOUSECODE_HOME/lib/finding_view.py" \
+      --briefing "$briefing" --all --color "$color"; then
+    warn "inhousecode: could not render finding source excerpts."
+  fi
+  return 0
+}
+
 # A cheap snapshot of everything git can see. Compared across the session so a
 # passing run is only downgraded when the tree actually moved -- blocking a
 # developer who asked a question and changed nothing would teach them not to ask.
@@ -81,24 +96,17 @@ explain_collect_findings() {
 # Sets EXPLAIN_BRIEFING and EXPLAIN_COUNT. Returns non-zero when there is
 # nothing to brief or the briefing could not be written.
 build_explain_briefing() {
-  local findings briefing count rulebook="" rulebook_display=""
+  local findings briefing count
   findings="${INHOUSECODE_CACHE_ROOT:-$REPO_ROOT/.inhousecode/cache}/explain-findings.tsv"
   briefing="$(explain_briefing_path)"
 
   explain_collect_findings "$findings" || return 1
   resolve_python || return 1
 
-  if [ -f "$REPO_ROOT/$INHOUSECODE_RULEBOOK" ]; then
-    rulebook="$REPO_ROOT/$INHOUSECODE_RULEBOOK"
-    rulebook_display="$INHOUSECODE_RULEBOOK"
-  fi
-
   count="$("${PYTHON_CMD[@]}" "$INHOUSECODE_HOME/lib/explain.py" \
     --findings "$findings" \
     --out "$briefing" \
     --repo-root "$REPO_ROOT" \
-    --rulebook "$rulebook" \
-    --rulebook-path "$rulebook_display" \
     --target-mode "$TARGET_MODE" \
     --diff-head "${DIFF_HEAD:-HEAD}" \
     --diff-source "${DIFF_SOURCE:-commit}" \
@@ -273,13 +281,13 @@ explain_launch_session() {
       "no terminal is attached, so no session was started."
     return 1
   fi
-  if ! COPILOT_PATH="$(resolve_copilot)"; then
+  if ! resolve_harness_bin >/dev/null 2>&1; then
     explain_print_fallback "$briefing" \
-      "the Copilot CLI was not found; the briefing above stands on its own."
+      "the ${INHOUSECODE_HARNESS:-copilot} CLI was not found; the briefing above stands on its own."
     return 1
   fi
 
-  step "Opening a Copilot session over these findings..."
+  step "Opening a ${INHOUSECODE_HARNESS:-copilot} session over these findings..."
   info "  It explains first and edits nothing until you ask. Exit it to come back."
   local before after
   before="$(explain_tree_fingerprint)"

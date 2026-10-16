@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -24,6 +25,7 @@ config = load_module("config")
 
 def defaults() -> dict:
     return {
+        "review": {"fixByDefault": False},
         "static": {"enabled": True, "maxFixLoops": 20, "semgrepConfigs": ["p/python"]},
         "ai": {
             "enabled": True,
@@ -32,11 +34,23 @@ def defaults() -> dict:
             "critiqueRounds": 2,
             "triageFindings": True,
         },
-        "rulebook": ".inhousecode/developer-rulebook.md",
+        "memory": {
+            "enabled": True,
+            "contextMaxChars": 4000,
+            "recordSessions": False,
+            "autoPromoteAfterReviews": 3,
+        },
     }
 
 
 class MergeTests(unittest.TestCase):
+    def test_loads_utf8_bom_configuration_written_by_windows_powershell(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "config.json"
+            path.write_bytes(b'\xef\xbb\xbf{"review":{"fixByDefault":true}}')
+            loaded = config.load_json_object(path, "test config")
+        self.assertTrue(loaded["review"]["fixByDefault"])
+
     def test_no_overrides_returns_defaults_unchanged(self):
         merged = config.merge(defaults(), {})
         self.assertEqual(merged, defaults())
@@ -108,6 +122,26 @@ class ValidateScalarTests(unittest.TestCase):
         self.assertEqual(config.validate_scalar(("static", "maxFixLoops"), 20, 0), 0)
         self.assertEqual(config.validate_scalar(("static", "maxFixLoops"), 20, 20), 20)
 
+    def test_memory_context_budget_is_bounded(self):
+        self.assertEqual(
+            config.validate_scalar(("memory", "contextMaxChars"), 4000, 500),
+            500,
+        )
+        with self.assertRaisesRegex(config.ConfigError, "must be between 500 and 20000"):
+            config.validate_scalar(("memory", "contextMaxChars"), 4000, 499)
+
+    def test_auto_promotion_threshold_is_zero_or_at_least_two(self):
+        self.assertEqual(
+            config.validate_scalar(("memory", "autoPromoteAfterReviews"), 3, 0),
+            0,
+        )
+        self.assertEqual(
+            config.validate_scalar(("memory", "autoPromoteAfterReviews"), 3, 2),
+            2,
+        )
+        with self.assertRaisesRegex(config.ConfigError, "must be 0 or between 2 and 100"):
+            config.validate_scalar(("memory", "autoPromoteAfterReviews"), 3, 1)
+
     def test_int_field_without_explicit_bounds_uses_default_range(self):
         # ("agentStop", "unbounded") is not in INTEGER_BOUNDS, so it falls back
         # to the documented (0, 10_000) default rather than being unbounded.
@@ -120,6 +154,9 @@ class ValidateScalarTests(unittest.TestCase):
 
     def test_string_field_accepts_plain_text(self):
         self.assertEqual(config.validate_scalar(("ai", "model"), "", "gpt-5.6-sol"), "gpt-5.6-sol")
+
+    def test_codex_is_a_supported_harness(self):
+        self.assertEqual(config.validate_scalar(("harness",), "copilot", "codex"), "codex")
 
     def test_list_field_rejects_non_string_items(self):
         with self.assertRaisesRegex(config.ConfigError, "must be an array of strings"):
@@ -249,6 +286,55 @@ class MainIntegrationTests(unittest.TestCase):
         exit_code, out = self._run([str(self.install_root), str(self.repo_root)])
         self.assertEqual(exit_code, 1)
         self.assertIn("unknown configuration key", out)
+
+    def test_removed_local_memory_budget_is_rejected(self):
+        (self.repo_root / ".inhousecode" / "config.json").write_text(
+            json.dumps({"memory": {"maxChars": 4000}})
+        )
+        exit_code, out = self._run([str(self.install_root), str(self.repo_root)])
+        self.assertEqual(exit_code, 1)
+        self.assertIn("unknown configuration key: memory.maxChars", out)
+
+    def test_removed_rulebook_key_is_rejected(self):
+        (self.repo_root / ".inhousecode" / "config.json").write_text(
+            json.dumps({"rulebook": ".inhousecode/developer-rulebook.md"})
+        )
+        code, out = self._run([str(self.install_root), str(self.repo_root)])
+        self.assertEqual(code, 1)
+        self.assertIn("unknown configuration key: rulebook", out)
+
+    def test_record_sessions_is_off_by_default_and_can_be_enabled(self):
+        exit_code, out = self._run([str(self.install_root), str(self.repo_root)])
+        self.assertEqual(exit_code, 0)
+        self.assertIn("INHOUSECODE_MEMORY_RECORD_SESSIONS=0", out)
+        (self.repo_root / ".inhousecode" / "config.json").write_text(
+            json.dumps({"memory": {"recordSessions": True}})
+        )
+        exit_code, out = self._run([str(self.install_root), str(self.repo_root)])
+        self.assertEqual(exit_code, 0)
+        self.assertIn("INHOUSECODE_MEMORY_RECORD_SESSIONS=1", out)
+
+    def test_fix_by_default_is_opt_in_and_can_be_enabled(self):
+        exit_code, out = self._run([str(self.install_root), str(self.repo_root)])
+        self.assertEqual(exit_code, 0)
+        self.assertIn("INHOUSECODE_REVIEW_FIX_BY_DEFAULT=0", out)
+        (self.repo_root / ".inhousecode" / "config.json").write_text(
+            json.dumps({"review": {"fixByDefault": True}})
+        )
+        exit_code, out = self._run([str(self.install_root), str(self.repo_root)])
+        self.assertEqual(exit_code, 0)
+        self.assertIn("INHOUSECODE_REVIEW_FIX_BY_DEFAULT=1", out)
+
+    def test_automatic_promotion_uses_three_reviews_by_default_and_can_be_disabled(self):
+        exit_code, out = self._run([str(self.install_root), str(self.repo_root)])
+        self.assertEqual(exit_code, 0)
+        self.assertIn("INHOUSECODE_MEMORY_AUTO_PROMOTE_AFTER_REVIEWS=3", out)
+        (self.repo_root / ".inhousecode" / "config.json").write_text(
+            json.dumps({"memory": {"autoPromoteAfterReviews": 0}})
+        )
+        exit_code, out = self._run([str(self.install_root), str(self.repo_root)])
+        self.assertEqual(exit_code, 0)
+        self.assertIn("INHOUSECODE_MEMORY_AUTO_PROMOTE_AFTER_REVIEWS=0", out)
 
     def test_malformed_json_fails_closed_not_with_a_traceback(self):
         (self.repo_root / ".inhousecode" / "config.json").write_text("{not json")

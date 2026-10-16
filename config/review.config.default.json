@@ -1,5 +1,9 @@
 {
   "$schema": "./review.config.schema.json",
+  "harness": "copilot",
+  "review": {
+    "fixByDefault": false
+  },
   "triggers": {
     "preCommit": true,
     "agentStop": false
@@ -26,7 +30,7 @@
     "triageFindings": true,
     "verifyIntent": true,
     "impactAnalysis": true,
-    "critiqueModel": "gpt-5.6-sol",
+    "critiqueModel": "",
     "critiqueRounds": 2
   },
   "agentStop": {
@@ -40,5 +44,15 @@
     "contextLines": 5,
     "model": ""
   },
-  "rulebook": ".inhousecode/developer-rulebook.md"
+  "memory": {
+    "enabled": true,
+    "contextMaxChars": 4000,
+    "recordSessions": false,
+    "autoPromoteAfterReviews": 3
+  },
+  "adversarial": {
+    "enabled": false,
+    "model": "",
+    "maxLenses": 4
+  }
 }

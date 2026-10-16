@@ -33,12 +33,17 @@ local git config and can't be set on someone else's behalf anyway.
 From here, `git commit` runs both phases against what's staged. Skip it once
 with `git commit --no-verify`.
 
-## Option B: agent-stop (the newer one)
+## Option B: agent-stop (the newer one, Copilot CLI only)
 
 Fires the moment your coding agent finishes a turn — Copilot CLI's
 `agentStop` hook — and can hand findings straight back to the *same agent*,
 with its context still loaded, before you ever see the output. No second
 model, no diff to re-explain, feedback while the work is still warm.
+
+This trigger is a Copilot CLI feature specifically; it has no equivalent yet
+for the `claude-code` or `hermes` harnesses (see
+[docs/configuration.md](../configuration.md#harness)). If you configured a
+different harness, use Option A.
 
 ```bash
 inhousecode install-hooks --agent-stop
@@ -68,7 +73,7 @@ inhousecode uninstall-hooks
 ```
 
 Removes the shims, unsets `core.hooksPath` if `.githooks/` ends up empty,
-and leaves `.inhousecode/` — your rulebook and config — untouched.
+and leaves `.inhousecode/` configuration and transient cache untouched.
 
 ## Next
 

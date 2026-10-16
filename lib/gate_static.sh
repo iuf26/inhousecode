@@ -15,6 +15,8 @@ STATIC_STATUS="not-run"
 STATIC_OUTPUT=""
 STATIC_ERROR=""
 STATIC_FIX_ROUNDS=0
+# The first scan's report, before any repair (see AI_INITIAL_OUTPUT).
+STATIC_INITIAL_OUTPUT=""
 
 static_scan_once() {
   local envelope="$INHOUSECODE_CACHE_ROOT/scan-envelope.json"
@@ -98,6 +100,7 @@ run_static_gate() {
   fi
 
   local selection="$INHOUSECODE_STATIC_FIX_SEVERITY" remaining previous_remaining=-1
+  [ "${INHOUSECODE_FIX_ALL:-0}" = "1" ] && selection="all"
   case "$selection" in
     all|blocking) ;;
     *) selection="all" ;;
@@ -114,6 +117,7 @@ run_static_gate() {
     static_classify
     print_findings_report "Static analysis" "$STATIC_OUTPUT" \
       "$STATIC_FINDING_MARKER" "$STATIC_VERDICT_PREFIX"
+    [ "$STATIC_FIX_ROUNDS" -eq 0 ] && STATIC_INITIAL_OUTPUT="$STATIC_OUTPUT"
 
     [ "$STATIC_STATUS" = "unavailable" ] && return 1
     remaining="$(count_findings "$STATIC_OUTPUT" "$STATIC_FINDING_MARKER" "$selection")"
@@ -139,8 +143,9 @@ run_static_gate() {
     info "Static repair round $STATIC_FIX_ROUNDS/$INHOUSECODE_STATIC_MAX_FIX_LOOPS - $remaining finding(s) to resolve."
     if ! static_fix_round "$selection"; then
       warn "inhousecode: the static repair round did not complete."
-      break
     fi
+    # A failed or timed-out fixer may still have edited the tree. Always scan
+    # again before trusting a verdict about the pre-fix source.
     static_restage || break
   done
 

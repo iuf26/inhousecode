@@ -8,7 +8,7 @@ one-paragraph version of all of this, see [concept.md](concept.md).
 ```mermaid
 flowchart LR
     P1["Phase 1 — Semgrep<br/>deterministic, no opinion<br/>repair loop, up to 20x"]
-    P2["Phase 2 — AI code review<br/>reads your team's rulebook<br/>then every finding, your call"]
+    P2["Phase 2 — AI code review<br/>reads governed team knowledge<br/>then every finding, your call"]
     P1 -->|floor holds| P2
 ```
 
@@ -27,16 +27,9 @@ inhousecode is built around five positions on that:
 |---|---|
 | **A deterministic floor comes first** | Semgrep runs before any model opines — no context window, no temperature, nothing to talk it out of a finding. It catches injection, unsafe deserialization, hard-coded credentials: the class of bug generated code reproduces constantly. The AI phase only ever reviews code that already cleared this. |
 | **Findings are useless; fixes are the product** | A gate that prints twelve problems and stops has moved work, not removed it. Phase 1 loops findings to a fixer agent, re-scans, and repeats — up to 20 rounds, stopping the moment a round makes no progress. You come back to clean code, not a list. |
-| **Severity decides who's in charge** | **CRITICAL/HIGH** are fixed automatically, then re-reviewed — not opinions, so approving the fix would just waste your attention. **MEDIUM/LOW** are listed, numbered, and left to **you** — those are opinions, and an agent that silently restructures your code because it prefers a different shape isn't reviewing, it's editing. |
+| **Severity decides who's in charge** | **CRITICAL/HIGH** are fixed automatically, then re-reviewed. **MEDIUM/LOW** are listed, numbered, and left to **you** unless you explicitly opt into all-finding repair with `--fix` or `review.fixByDefault`. |
 | **Blocking without explaining is just friction** | A verdict tells you *what*, rarely *why*. A blocked commit offers `[e] explain` next to override/abort — an interactive session that quotes the exact rule violated, shows the offending lines, then **stops and asks you** what to do, before anything is fixed. |
-| **Your team's knowledge has somewhere to live** | `.inhousecode/developer-rulebook.md` is a plain file your team owns, re-read on every run, cited by name in every finding — the difference between a generic reviewer and *yours*. This is the whole reason for the name: rules declared **in-house**, not shipped in from a vendor's idea of clean code. |
-
-A rulebook entry is one line:
-
-```markdown
-- tenant-scoped-queries (sql) — every query filters by tenant_id
-- no-print-logging (python) — use logging, not print(), in library code
-```
+| **Your team's knowledge has somewhere to live** | OpenViking stores governed project, global, and candidate records. inhousecode controls scope, evidence, promotion, expiry, and quarantine, then freezes the relevant records for each review. |
 
 ## Two triggers — pick either, or both
 
@@ -57,7 +50,7 @@ nor a confused model can wave a commit through.
 
 | Component | Access |
 |---|---|
-| Review agent ([Copilot skill](../skills/code-review/SKILL.md)) | Read-only — judges the tree, cannot write to it |
+| Review agent ([code-review skill](../skills/code-review/SKILL.md)) | Read-only — judges the tree, cannot write to it |
 | Fixer agent | Write-enabled, but only ever acts on findings a gate already produced |
 | `[e]` explain session | Interactive, yours, pre-approved only for reading |
 | Instructions found *inside* reviewed code | Treated as input, never as direction |

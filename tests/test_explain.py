@@ -97,70 +97,6 @@ class ReadFindingsTests(unittest.TestCase):
         self.assertEqual(explain.read_findings(Path("/nonexistent/findings.tsv")), [])
 
 
-class RulebookParsingTests(unittest.TestCase):
-    def _write(self, content: str) -> Path:
-        import tempfile
-
-        handle = tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False, encoding="utf-8")
-        handle.write(content)
-        handle.close()
-        self.addCleanup(lambda: Path(handle.name).unlink(missing_ok=True))
-        return Path(handle.name)
-
-    def test_parses_standard_entry_form(self):
-        path = self._write("- no-broad-except (backend) — never catch bare Exception\n")
-        rules = explain.parse_rulebook(path)
-        self.assertIn("no-broad-except", rules)
-        self.assertEqual(rules["no-broad-except"]["scope"], "backend")
-        self.assertEqual(rules["no-broad-except"]["rule"], "never catch bare Exception")
-
-    def test_parses_legacy_checkbox_form(self):
-        path = self._write("- [ ] no-broad-except (backend) - never catch bare Exception\n")
-        rules = explain.parse_rulebook(path)
-        self.assertIn("no-broad-except", rules)
-
-    def test_ignores_non_matching_lines(self):
-        path = self._write("# Rulebook\n\nSome prose that is not a rule entry.\n")
-        self.assertEqual(explain.parse_rulebook(path), {})
-
-    def test_missing_rulebook_returns_empty(self):
-        self.assertEqual(explain.parse_rulebook(Path("/nonexistent/rulebook.md")), {})
-
-    def test_empty_path_returns_empty(self):
-        self.assertEqual(explain.parse_rulebook(None), {})
-
-
-class MatchRuleTests(unittest.TestCase):
-    def setUp(self):
-        self.rules = {
-            "no-broad-except": {
-                "id": "no-broad-except",
-                "scope": "backend",
-                "rule": "never catch bare Exception",
-                "line": "- no-broad-except (backend) — never catch bare Exception",
-            }
-        }
-
-    def test_exact_normalized_match(self):
-        entry = explain.match_rule("no-broad-except", self.rules)
-        self.assertEqual(entry["id"], "no-broad-except")
-
-    def test_fuzzy_match_when_category_wraps_the_id(self):
-        entry = explain.match_rule("violates no-broad-except rule", self.rules)
-        self.assertEqual(entry["id"], "no-broad-except")
-
-    def test_no_match_returns_none(self):
-        self.assertIsNone(explain.match_rule("totally-unrelated-category", self.rules))
-
-    def test_empty_rules_returns_none(self):
-        self.assertIsNone(explain.match_rule("no-broad-except", {}))
-
-    def test_short_rule_ids_do_not_fuzzy_match_everything(self):
-        # MIN_FUZZY_RULE_ID guards against a 2-3 char id matching almost any
-        # category via substring containment.
-        rules = {"io": {"id": "io", "scope": "x", "rule": "y", "line": "z"}}
-        self.assertIsNone(explain.match_rule("some-io-related-category", rules))
-
 
 class BuildExcerptTests(unittest.TestCase):
     def test_window_is_clamped_to_file_bounds(self):
@@ -242,6 +178,38 @@ class ReadSourceFallbackTests(unittest.TestCase):
 
 
 class RenderTests(unittest.TestCase):
+    def test_render_quotes_promoted_project_rule_and_scope(self):
+        findings = [
+            explain.Finding(
+                "review", "MEDIUM", "a.py:2", "project-select-columns", "name columns"
+            )
+        ]
+        rules = {
+            "project-select-columns": {
+                "scope": "project",
+                "content": "Queries must name their columns; SELECT * is not allowed.",
+                "uri": "viking://project/rule.json",
+            }
+        }
+        out = explain.render(findings, rules, make_args())
+        self.assertIn("Rule source: promoted project knowledge", out)
+        self.assertIn("Rule: Queries must name their columns; SELECT * is not allowed.", out)
+        self.assertIn("Memory record: `project-select-columns`", out)
+
+    def test_parse_memory_rules_reads_project_and_global_sections(self):
+        context = """## Promoted project knowledge
+- [project-one] Project rule.
+  URI: viking://project/one.json; status: promoted; repository: repo; confidence: high
+
+## Promoted global knowledge
+- [global-one] Global rule.
+  URI: viking://global/one.json; status: promoted; repository: global; confidence: high
+"""
+        rules = explain.parse_memory_rules(context)
+        self.assertEqual(rules["project-one"]["scope"], "project")
+        self.assertEqual(rules["project-one"]["content"], "Project rule.")
+        self.assertEqual(rules["global-one"]["scope"], "global")
+
     def test_render_includes_counts_and_gate_label(self):
         findings = [explain.Finding("static", "CRITICAL", "a.py:1", "no-broad-except", "catch specific errors")]
         args = make_args()
@@ -249,23 +217,11 @@ class RenderTests(unittest.TestCase):
         self.assertIn("1 finding(s) to explain - 1 blocking, 0 advisory.", out)
         self.assertIn("Semgrep (phase 1)", out)
 
-    def test_render_quotes_matched_rule_verbatim(self):
-        rules = {
-            "no-broad-except": {
-                "id": "no-broad-except",
-                "scope": "backend",
-                "rule": "never catch bare Exception",
-                "line": "- no-broad-except (backend) — never catch bare Exception",
-            }
-        }
-        findings = [explain.Finding("review", "HIGH", "a.py:1", "no-broad-except", "fix it")]
-        out = explain.render(findings, rules, make_args())
-        self.assertIn("- no-broad-except (backend) — never catch bare Exception", out)
-
-    def test_render_reports_no_rule_matched_for_ai_gate(self):
+    def test_render_reports_review_category(self):
         findings = [explain.Finding("review", "MEDIUM", "a.py:1", "unmatched-category", "fix it")]
         out = explain.render(findings, {}, make_args())
-        self.assertIn("no team rule matched; this is a general review criterion", out)
+        self.assertIn("Review category `unmatched-category`", out)
+        self.assertNotIn("rulebook", out.lower())
 
     def test_render_reports_semgrep_rule_when_static_gate_unmatched(self):
         findings = [explain.Finding("static", "MEDIUM", "a.py:1", "some-semgrep-rule", "fix it")]

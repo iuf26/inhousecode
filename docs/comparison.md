@@ -109,17 +109,17 @@ except where you run it.
 | **When it runs** | PR open / push / `@claude review` | PR open / push / on demand | `git commit`, agent-stop hook, or `review --pr` |
 | **Deterministic layer** | None — model only | None — model only | **Semgrep runs first**, before any model opines |
 | **Can it block?** | No, neutral check by design | No, needs Code Quality rulesets | **Yes** — that's the point; non-zero exit stops the commit |
-| **Does it fix?** | No, posts comments | Suggestions you apply | **Yes** — static repair loop (≤20 rounds), auto-fix for CRITICAL/HIGH |
-| **Who decides on a finding** | You, per comment | You, per suggestion | **Severity decides**: CRITICAL/HIGH auto-fixed, MEDIUM/LOW numbered and left to you |
+| **Does it fix?** | No, posts comments | Suggestions you apply | **Yes** — bounded static and AI repair; opt-in all-finding repair |
+| **Who decides on a finding** | You, per comment | You, per suggestion | **Severity plus policy**: CRITICAL/HIGH automatic; MEDIUM/LOW manual unless `--fix` or `review.fixByDefault` opts in |
 | **False-positive control** | Verification agent | None documented | Rubber-duck critique + **second opinion from a different model**, strictly subtractive |
-| **Team rules** | `CLAUDE.md`, `REVIEW.md` | `copilot-instructions.md`, `AGENTS.md`, `REVIEW.md`, `CLAUDE.md` | `.inhousecode/developer-rulebook.md`, **cited by name in every finding** |
+| **Team rules** | `CLAUDE.md`, `REVIEW.md` | `copilot-instructions.md`, `AGENTS.md`, `REVIEW.md`, `CLAUDE.md` | Governed OpenViking project/global knowledge with provenance and evidence |
 | **Can you change the reviewer itself?** | No — instructions only, the pipeline is Anthropic's | No — instructions only, the pipeline is GitHub's | **Yes** — the reviewer *is* a skill in your repo; edit its method, fork it, reuse it |
 | **Can you add your own checks?** | No | No | **Yes** — any tool that emits the finding contract is a gate |
 | **Codebase context** | **Full repo, multi-agent** — strongest here | Diff + instruction files | Diff + blast-radius map + commit log + PR description |
-| **Explains a finding** | Collapsible reasoning in the comment | Comment text | `[e]` → briefing quoting the rule **verbatim**, then an interactive session |
+| **Explains a finding** | Collapsible reasoning in the comment | Comment text | Source excerpt, rule provenance, and `[e]` interactive briefing |
 | **Fails safe?** | Best-effort; failed run posts nothing | Best-effort | **Malformed or missing output = `unavailable` = blocks.** Never a silent pass |
 | **Cost per review** | **$15–25** | **$0.05–$5** (+ Actions minutes) | Your CLI's own credits, itemized per phase in the run summary |
-| **Availability** | Team/Enterprise, no ZDR orgs | All paid Copilot plans | MIT license, self-hosted, any repo — requires Copilot CLI today; a managed cloud version is available commercially |
+| **Availability** | Team/Enterprise, no ZDR orgs | All paid Copilot plans | MIT license, self-hosted, any repo — requires an AI CLI (Copilot, Claude Code, Codex, or Hermes) today; a managed cloud version is available commercially |
 
 ### Sources
 
@@ -178,10 +178,10 @@ no cost or setup decision to make, this is the pragmatic default.
 
 **inhousecode** wins on **control**, and that word is doing specific work:
 
-1. **Control over what "bad" means.** The rulebook is one line per rule, in
-   your repo, re-read every run, and every finding cites the rule by name. Not
-   a vendor's calibration of "Important" that you nudge with prose — your rule,
-   quoted back at you.
+1. **Control over what "bad" means.** Governed OpenViking records separate
+   project, global, and candidate knowledge. Each active record keeps evidence,
+   provenance, scope, and lifecycle instead of relying on a vendor's fixed
+   calibration.
 2. **Control over when it happens.** Before the commit, or the moment your
    agent stops generating — with the agent's context still loaded, so a fix
    costs nothing to re-explain. Not after the code is already pushed and named
@@ -212,8 +212,9 @@ no cost or setup decision to make, this is the pragmatic default.
    verdict.
 
 And the honest limits: inhousecode has no full-codebase multi-agent sweep, no
-hosted infrastructure, no dashboard, and it depends on the Copilot CLI, Semgrep,
-and Python being installed. It is a gate, not a reviewer-of-record.
+hosted infrastructure, no dashboard, and it depends on an AI CLI (Copilot,
+Claude Code, Codex, or Hermes), Semgrep, and Python being installed. It is a gate,
+not a reviewer-of-record.
 
 ## These are not mutually exclusive
 
@@ -225,6 +226,6 @@ only reason running two of anything is ever worth it.
 
 ---
 
-See also: [concept.md](concept.md) for why the rulebook is the whole idea,
+See also: [concept.md](concept.md) for why governed team knowledge is the core idea,
 [design-principles.md](design-principles.md) for why static comes before AI,
 and [architecture.md](architecture.md) for the pipeline and trust boundaries.
