@@ -115,11 +115,12 @@ re-staged.
 
 Precedence is fixed and independent of flag order:
 
-1. `--no-fix` disables every repair and the interactive picker.
-2. `--fix` enables all-finding repair for that run.
-3. Otherwise, `review.fixByDefault` decides whether all-finding repair is on.
-4. When all-finding repair is off, `static.autofix`, `ai.autofixBlocking`, and
-   `ai.triageFindings` keep their existing behavior.
+| Priority | Wins when present | Effect |
+|---|---|---|
+| 1 (highest) | `--no-fix` | disables every repair and the interactive picker |
+| 2 | `--fix` | enables all-finding repair for that run |
+| 3 | neither flag | `review.fixByDefault` decides whether all-finding repair is on |
+| 4 (fallback) | all-finding repair off | `static.autofix`, `ai.autofixBlocking`, `ai.triageFindings` keep their own settings |
 
 For `--diff` and `--pr`, the setting counts as the repair opt-in, but repairs
 are still refused unless the reviewed commit is currently checked out.

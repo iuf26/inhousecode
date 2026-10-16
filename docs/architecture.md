@@ -361,6 +361,12 @@ and
 
 Both loops are bounded, and both stop early.
 
+| Loop | Budget (default) | Runs on | Stops when |
+|---|---|---|---|
+| **Static** | `static.maxFixLoops` = 20 | CRITICAL/HIGH/MEDIUM/LOW findings `--fix` or `fixByDefault` makes all of them eligible | scan is clean, budget spent, or a round removes nothing |
+| **Review** | `ai.maxFixLoops` = 3 | blocking findings by default; all findings under `--fix`/`fixByDefault` | finding count stops improving, or budget spent |
+| **Triage** | same budget as Review | developer's hand-picked selection from the numbered table | developer re-reviews and re-picks until clean, or budget runs out |
+
 **Static** — `static.maxFixLoops` (default 20). Each round: report findings, hand
 them to the fixer, re-scan. The loop exits when the scan is clean, when the
 budget is spent, or when a round fails to reduce the finding count. That last
@@ -429,19 +435,11 @@ because two copies of a standard are two standards.
 
 It asks for three things a model does not do by default:
 
-**Follow the repository's own guidelines.** `AGENTS.md`, `CONTRIBUTING`,
-`.github/copilot-instructions.md`, approved review knowledge, and the style already
-visible in the file. When house style and the model's preference disagree, house
-style wins. A technically correct fix written in a dialect the repository does
-not speak still costs a reviewer their afternoon.
-
-**Do not block the developer.** Fixers run with `--no-ask-user`, so an agent
-that decides to ask a question does not get an answer — it stalls and burns the
-round. "Make the most defensible choice, apply it, and flag it in the summary"
-is therefore load-bearing, not politeness.
-
-**Leave it better than a patch.** Match the surrounding naming, error handling,
-and structure. The next reader is a person.
+| Rule | What it means in practice |
+|---|---|
+| **Follow the repository's own guidelines** | `AGENTS.md`, `CONTRIBUTING`, `.github/copilot-instructions.md`, approved review knowledge, and the style already visible in the file win over the model's own preference. A technically correct fix in a dialect the repository does not speak still costs a reviewer their afternoon. |
+| **Do not block the developer** | Fixers run with `--no-ask-user`: an agent that decides to ask a question gets no answer and burns the round. "Make the most defensible choice, apply it, flag it in the summary" is load-bearing, not politeness. |
+| **Leave it better than a patch** | Match the surrounding naming, error handling, and structure. The next reader is a person. |
 
 The reviewer is deliberately excluded: it runs with `--no-custom-instructions`
 so that reviewed code cannot rewrite the reviewer's brief. The fixers *do*
@@ -496,33 +494,39 @@ direction is safe by construction.
 
 ## Layout
 
-```
-bin/inhousecode              CLI: target resolution, orchestration, verdict
-lib/common.sh                  config load, findings parsing, contract validation
-lib/config.py                   layered config resolution → shell variables
-lib/harness.sh                  AI CLI backend selection (copilot/claude-code/hermes)
-lib/harness_copilot.sh          Copilot CLI adapter
-lib/harness_claude_code.sh      Claude Code CLI adapter
-lib/harness_hermes.sh           Hermes CLI adapter
-lib/copilot.sh                  review vs. fix vs. discover vs. explain invocation, cost accounting
-lib/memory_policy.py            governed OpenViking memory: lifecycle, retrieval, snapshot
-lib/memory.sh                   shell bridge to memory_policy.py; frozen per-review context
-lib/usage.py                     harness CLI output → the agent's answer, and what it cost
-lib/pr.sh                      pull-request resolution (gh / az / pull-ref)
-lib/impact.py                  diff → the definitions it adds/modifies/removes
-lib/impact.sh                  those definitions → who else still depends on them
-lib/static_scan.sh             file selection, isolated tree, semgrep
-lib/static_report.py           semgrep JSON → finding contract
-lib/gate_static.sh             Phase 1 + repair loop
-lib/gate_ai.sh                 Phase 2 + blocking repair + finding triage
-lib/explain.sh                 briefing assembly + session handoff
-lib/explain.py                 findings + source → briefing markdown
-hooks/agent-stop.sh            Copilot agentStop handler (fails open)
-hooks/copilot-hooks.template.json
-skills/code-review/            the reviewer: SKILL.md + references
-skills/discovery/               the onboarding agent: SKILL.md
-config/                        default config + JSON schema
-```
+| File | Responsibility |
+|---|---|
+| `bin/inhousecode` | CLI: target resolution, orchestration, verdict |
+| `lib/common.sh` | config load, findings parsing, contract validation |
+| `lib/config.py` | layered config resolution → shell variables |
+| `lib/harness.sh` | AI CLI backend selection (copilot/claude-code/codex/hermes) |
+| `lib/harness_copilot.sh` | Copilot CLI adapter |
+| `lib/harness_claude_code.sh` | Claude Code CLI adapter |
+| `lib/harness_codex.sh` | Codex CLI adapter |
+| `lib/harness_hermes.sh` | Hermes CLI adapter |
+| `lib/copilot.sh` | review vs. fix vs. discover vs. explain invocation, cost accounting |
+| `lib/memory_policy.py` | governed OpenViking memory: lifecycle, retrieval, snapshot |
+| `lib/memory.sh` | shell bridge to `memory_policy.py`; frozen per-review context |
+| `lib/usage.py` | harness CLI output → the agent's answer, and what it cost |
+| `lib/pr.sh` | pull-request resolution (`gh` / `az` / pull-ref) |
+| `lib/impact.py` | diff → the definitions it adds/modifies/removes |
+| `lib/impact.sh` | those definitions → who else still depends on them |
+| `lib/static_scan.sh` | file selection, isolated tree, Semgrep (in-process, or emit/consume for a harness) |
+| `lib/static_report.py` | Semgrep JSON → finding contract |
+| `lib/gate_static.sh` | Phase 1 + repair loop |
+| `lib/gate_ai.sh` | Phase 2 + blocking repair + finding triage |
+| `lib/gate_adversarial.sh` | opt-in multi-lens review + synthesis |
+| `lib/finding_view.py` | renders one or all findings with source excerpts and highlighting |
+| `lib/integrations.py` | installs/updates/removes the managed Hermes and Codex Agent Skills |
+| `lib/explain.sh` | briefing assembly + session handoff |
+| `lib/explain.py` | findings + source → briefing markdown |
+| `hooks/agent-stop.sh` | Copilot `agentStop` handler (fails open) |
+| `hooks/copilot-hooks.template.json` | template installed by `install-hooks --agent-stop` |
+| `skills/code-review/` | the reviewer: `SKILL.md` + references |
+| `skills/adversarial-review/` | the multi-lens reviewer: `SKILL.md` + references |
+| `skills/discovery/` | the onboarding agent: `SKILL.md` |
+| `skills/inhousecode/` | the thin harness adapter skill shipped to Hermes/Codex |
+| `config/` | default config + JSON schema |
 
 ## Failure behavior
 

@@ -2,12 +2,14 @@
 
 ## What you need first
 
-- **git** ≥ **2.9** — that's when `core.hooksPath` landed, which is all the hook needs (verified on 2.39.5)
-- **Python** ≥ **3.9**, and 3.10+ in practice — 3.9 is end-of-life and current Semgrep needs 3.10 anyway (verified on 3.12.13)
-- **[Semgrep](https://semgrep.dev)** ≥ **1.0.0** — every flag the scanner passes has been stable since that release; rule packs are still fetched live, so prefer a current version
-- **[Copilot CLI](https://github.com/github/copilot-cli)** ≥ **1.0.72** — the release that made `--no-custom-instructions` fully honored and bounded `agentStop` blocking (verified on 1.0.79)
-- **GNU `timeout`** (coreutils) ≥ **7.0** — when `timeout` and its exit-status-124 convention first shipped; on macOS `brew install coreutils` exposes it as `gtimeout` (verified on 9.10)
-- **Git Bash** (Windows only) — ships with [Git for Windows](https://git-scm.com/download/win) ≥ 2.9; bundles `timeout`
+| Need | Minimum | Why |
+|---|---|---|
+| **git** | 2.9 | `core.hooksPath` landed then — all the hook needs (verified on 2.39.5) |
+| **Python** | 3.9 (3.10+ in practice) | 3.9 is end-of-life and current Semgrep needs 3.10 anyway (verified on 3.12.13) |
+| **[Semgrep](https://semgrep.dev)** | 1.0.0 | every flag the scanner uses has been stable since; packs fetch live, so prefer current |
+| **[Copilot CLI](https://github.com/github/copilot-cli)** | 1.0.72 | made `--no-custom-instructions` fully honored and bounded `agentStop` (verified on 1.0.79) |
+| **GNU `timeout`** (coreutils) | 7.0 | the exit-status-124 convention first shipped then; macOS gets it via `brew install coreutils` as `gtimeout` (verified on 9.10) |
+| **Git Bash** (Windows only) | — | ships with [Git for Windows](https://git-scm.com/download/win) ≥ 2.9; bundles `timeout` |
 
 You don't strictly need Semgrep or Copilot CLI installed *before* this step —
 the installer can pull Semgrep in for you, and `inhousecode doctor` (last

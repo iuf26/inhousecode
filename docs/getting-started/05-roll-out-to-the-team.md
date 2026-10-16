@@ -9,28 +9,26 @@ the end of the week, and an uninstalled gate reviews nothing.
 
 ## The order that works
 
-1. **Ship it read-only first.** Keep `review.fixByDefault: false`, set
-   `static.autofix: false` and `ai.autofixBlocking: false`, and use `--no-fix`
-   for evaluation runs. Let the team see findings for a week without anything
-   changing under them.
-2. **Collect the disagreements.** Every "that's wrong" reply is either a rule
-   that needs fixing or missing context the reviewer didn't have. Both are
-   cheap to fix, and fixing them makes the next week quieter.
-3. **Turn on static repair.** Semgrep findings are deterministic, so their
-   fixes are too. This is where people first feel the tool save them time,
-   not just flag them.
-4. **Turn on AI repair for blocking findings.** By now governed knowledge reflects
-   how the team actually works, and the false-positive rate is low enough to
-   trust the automatic fix.
-5. **Optionally fix every finding by default.** Set
-   `review.fixByDefault: true` only after the team trusts non-blocking findings.
-   Developers can still force a report-only run with `--no-fix`.
-6. **Only then consider agent-stop.** Once people trust the gate at commit
-   time, move the check earlier — to the moment the code is generated, not
-   the moment it's committed.
+```mermaid
+flowchart TD
+    S1["1. Read-only<br/>(week 1)"] --> S2["2. Collect<br/>disagreements"]
+    S2 --> S3["3. Static repair on"]
+    S3 --> S4["4. AI repair on<br/>(blocking only)"]
+    S4 --> S5["5. fixByDefault: true<br/>(optional)"]
+    S5 --> S6["6. agent-stop<br/>(only once trusted)"]
+```
 
-Do not start at step 6. Interrupting every agent turn before anyone trusts
-the gate is the fastest way to get it deleted.
+| Step | Do this | Why |
+|---|---|---|
+| **1. Ship read-only** | `review.fixByDefault: false`, `static.autofix: false`, `ai.autofixBlocking: false`, use `--no-fix` for evaluation runs | Let the team see findings for a week without anything changing under them |
+| **2. Collect disagreements** | Track every "that's wrong" reply | Each one is either a rule to fix or missing context — both cheap, and fixing them makes the next week quieter |
+| **3. Turn on static repair** | Enable `static.autofix` | Semgrep findings are deterministic, so their fixes are too — first time people feel it save time, not just flag problems |
+| **4. Turn on AI repair (blocking)** | Enable `ai.autofixBlocking` | By now governed knowledge reflects how the team works, and the false-positive rate is low enough to trust |
+| **5. All-finding repair (optional)** | `review.fixByDefault: true` | Only after the team trusts non-blocking findings too; `--no-fix` still overrides per run |
+| **6. agent-stop (only once trusted)** | Install the `agentStop` trigger | Moves the check earlier — to generation time, not commit time |
+
+**Do not start at step 6.** Interrupting every agent turn before anyone
+trusts the gate is the fastest way to get it deleted.
 
 ## Before you flip on steps 4–6, check your AI CLI quota
 

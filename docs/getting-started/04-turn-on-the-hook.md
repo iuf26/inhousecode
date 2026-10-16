@@ -3,6 +3,14 @@
 So far you've run `inhousecode review` by hand. This page makes it run on
 its own, at one of two moments — pick either, or both.
 
+| | Option A: pre-commit | Option B: agent-stop |
+|---|---|---|
+| **Fires on** | `git commit` | the moment your agent finishes a turn |
+| **Checks** | your staged changes | whatever the agent just wrote |
+| **Default phases** | both | static only (AI opt-in) |
+| **Harness support** | any | Copilot CLI only, today |
+| **Skip once with** | `git commit --no-verify` | — (bounded to 20 turns/session) |
+
 ## Option A: pre-commit (the classic gate)
 
 Runs when you `git commit`, against your staged changes. You don't commit

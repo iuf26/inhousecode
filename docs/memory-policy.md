@@ -21,14 +21,11 @@ verdict reproducible.
 
 ## Authority boundary
 
-Three things remain separate:
-
-1. The code-review and adversarial skills define stable method, safety,
-   severities, lens responsibilities, and output contracts.
-2. OpenViking records hold variable team, project, architecture, and business
-   knowledge.
-3. `AGENTS.md` and tool-specific instruction files control how an agent works;
-   they are not review-policy databases.
+| Layer | Holds | Changed by |
+|---|---|---|
+| **Code-review / adversarial skills** | Stable method, safety, severities, lens responsibilities, output contracts | A normal versioned code change with tests — never memory |
+| **OpenViking records** | Variable team, project, architecture, and business knowledge | The governed candidate → classify → promote lifecycle below |
+| **`AGENTS.md` / tool instruction files** | How an agent works in this repo | Whoever maintains the repo — not a review-policy database |
 
 Memory cannot rewrite the adversarial skill. A candidate that proposes a new
 lens, weaker safety rule, severity change, or canonical skill change always
@@ -94,30 +91,42 @@ proof. Promotion creates a new record and preserves the source candidate.
 
 Automatic promotion is allowed only when all of these hold:
 
-- target is one repository;
-- confidence is high;
-- repository evidence is present;
-- no conflict was detected;
-- the content is not security-sensitive;
-- it does not alter review behavior or a canonical skill.
+| Condition (all must hold) | Checked by |
+|---|---|
+| Target is one repository | scope filter |
+| Confidence is high | classification |
+| Repository evidence is present | `--evidence file:line` |
+| No conflict was detected | conflict check against existing knowledge |
+| Content is not security-sensitive | content classifier |
+| Does not alter review behavior or a canonical skill | content classifier |
 
 Global, security, cross-repository, conflicting, weakly evidenced, uncertain,
 or reviewer-behavior changes require a human.
 
-States are `candidate`, `classified`, `promoted`, `rejected`, `expired`,
-`superseded`, and `quarantined`. Expired records remain stored but are not
-active. `review_after` keeps a record visible while adding it to the
-revalidation queue. Quarantine is never retrieved into a review prompt.
+| State | Active in review? | Notes |
+|---|---|---|
+| `candidate` | no | unclassified, awaiting triage |
+| `classified` | no | scoped and confidence-rated, pending promotion |
+| `promoted` | **yes** | active project or global knowledge |
+| `rejected` | no | reviewed and declined |
+| `expired` | no | past `expires_at`; record stays stored, not active |
+| `superseded` | no | replaced by a newer promoted record |
+| `quarantined` | no, never | unrelated or prompt-injection-like content |
+
+`review_after` keeps a record visible while adding it to the revalidation
+queue.
 
 ## Retrieval and precedence
 
 inhousecode searches project, global, and classified candidate areas separately.
 It applies policy filters before semantic ranking:
 
-1. built-in safety and review contract;
-2. approved project knowledge for the current repository;
-3. approved global knowledge;
-4. relevant candidates, labelled unverified evidence.
+| Precedence | Source | Trust level |
+|---|---|---|
+| 1 (highest) | Built-in safety and review contract | Fixed, not retrieved |
+| 2 | Approved project knowledge for the current repository | Promoted, repository-scoped |
+| 3 | Approved global knowledge | Promoted, cross-repository |
+| 4 (lowest) | Relevant candidates | Labelled unverified evidence |
 
 Scope, status, expiry, supersession, quarantine, and provenance are trust
 controls. An embedding score is only a relevance signal.

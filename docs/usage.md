@@ -1,19 +1,19 @@
 # Usage
 
-```bash
-inhousecode review                   # staged changes (what pre-commit runs)
-inhousecode review --pr 1234         # review a pull request by number
-inhousecode review --worktree        # everything uncommitted
-inhousecode review --diff main       # commits this branch adds on top of main
-inhousecode review --path src/api    # a whole folder or file
-inhousecode review --mode static     # skip the AI phase
-inhousecode review --no-fix          # report only, touch nothing
-inhousecode review --fix             # repair all static and AI findings
-inhousecode review --gate            # non-interactive; exit code is the verdict
-inhousecode explain                  # session over the last run's findings
-inhousecode discover                 # propose candidate knowledge for this repo
-inhousecode memory view --prompt "…" # ask what the team knows (read-only)
-```
+| Command | What it does |
+|---|---|
+| `inhousecode review` | staged changes (what pre-commit runs) |
+| `inhousecode review --pr 1234` | review a pull request by number |
+| `inhousecode review --worktree` | everything uncommitted |
+| `inhousecode review --diff main` | commits this branch adds on top of `main` |
+| `inhousecode review --path src/api` | a whole folder or file |
+| `inhousecode review --mode static` | skip the AI phase |
+| `inhousecode review --no-fix` | report only, touch nothing |
+| `inhousecode review --fix` | repair all static and AI findings |
+| `inhousecode review --gate` | non-interactive; exit code is the verdict |
+| `inhousecode explain` | session over the last run's findings |
+| `inhousecode discover` | propose candidate knowledge for this repo |
+| `inhousecode memory view --prompt "…"` | ask what the team knows (read-only) |
 
 Exit codes: `0` pass or override, `1` blocked, `2` usage error.
 
@@ -40,6 +40,13 @@ exists for harness integrations (see
 [harness-commands.md](harness-commands.md#run-semgrep-through-the-harnesss-own-terminal-tool));
 a standalone terminal session should just use `inhousecode review`.
 
+```mermaid
+flowchart LR
+    A["inhousecode static-check emit"] -->|prints semgrep command| B["You/harness run it"]
+    B -->|writes report.json| C["inhousecode static-check consume"]
+    C --> D["Finding table + verdict"]
+```
+
 ## Fix every finding by default
 
 Repairs are opt-in. To make every review repair all static and AI findings,
@@ -56,6 +63,13 @@ setting and over `--fix`, regardless of flag order. Repair loops are bounded,
 stop when the finding count does not improve, and re-review after every edit.
 Fixers do not commit or push. Pull-request and diff repairs are still disabled
 unless the reviewed commit is checked out.
+
+| Configured `fixByDefault` | CLI flag | Effective behavior |
+|---|---|---|
+| `false` (default) | none | report only |
+| `false` | `--fix` | repair all findings, this run |
+| `true` | none | repair all findings |
+| `true` | `--no-fix` | report only — `--no-fix` always wins |
 
 ## First-time setup: `inhousecode discover`
 

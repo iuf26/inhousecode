@@ -178,38 +178,14 @@ no cost or setup decision to make, this is the pragmatic default.
 
 **inhousecode** wins on **control**, and that word is doing specific work:
 
-1. **Control over what "bad" means.** Governed OpenViking records separate
-   project, global, and candidate knowledge. Each active record keeps evidence,
-   provenance, scope, and lifecycle instead of relying on a vendor's fixed
-   calibration.
-2. **Control over when it happens.** Before the commit, or the moment your
-   agent stops generating — with the agent's context still loaded, so a fix
-   costs nothing to re-explain. Not after the code is already pushed and named
-   in a PR.
-3. **Control over what gets through.** A malformed report blocks. A crashed
-   scanner blocks. A confused model blocks. Neither hosted service will ever
-   stop a merge on its own, because stopping merges is not a safe default for a
-   multi-tenant product — but it may be exactly the default *you* want.
-4. **Control over the floor.** Semgrep catches injection, hard-coded secrets,
-   and unsafe deserialization deterministically, before a model has an opinion.
-   If your only reviewer is a model, your entire safety net is one more thing
-   that can hallucinate.
-5. **Control over the bill.** Every phase — second opinion, repair rounds,
-   re-review — is a config key you can switch off, and the run summary itemizes
-   what each one cost using the CLI's own reported figures, never an estimate.
-6. **Control over the reviewer itself.** This is the one the other two
-   structurally cannot offer. With both hosted services you write *instructions*
-   and a fixed pipeline interprets them; the review method is the vendor's and
-   you tune it from the outside. Here the reviewer is
-   [a skill in your repo](../skills/code-review/SKILL.md) — its checklist, its
-   critique pass, its severity rubric, its output shape are all markdown files
-   your team can edit, fork per-repo, or lift wholesale into another project.
-   And because both phases speak one five-field
-   [finding contract](architecture.md#the-finding-contract), Semgrep is just
-   *an* implementation of a gate, not *the* static check: swap it, or bolt on
-   your own linter, license scanner, or house script, and the orchestrator
-   treats it identically — same severity handling, same repair loop, same
-   verdict.
+| Control over | What that means here | What a hosted product gives you instead |
+|---|---|---|
+| **What "bad" means** | Governed OpenViking records (project/global/candidate), each with evidence, provenance, scope, lifecycle | A vendor's fixed calibration |
+| **When it happens** | Before the commit, or the moment your agent stops generating, context still loaded | After the code is pushed and named in a PR |
+| **What gets through** | A malformed report, a crashed scanner, or a confused model all **block** | Neither hosted service stops a merge on its own — not a safe multi-tenant default |
+| **The floor** | Semgrep catches injection, hard-coded secrets, unsafe deserialization deterministically, before any model opines | Model-only; your whole safety net can hallucinate |
+| **The bill** | Every phase is a config key you can switch off; the summary itemizes real CLI-reported cost | A vendor-set price per review |
+| **The reviewer itself** | [A skill in your repo](../skills/code-review/SKILL.md) — checklist, critique pass, severity rubric, output shape are markdown you edit, fork, or lift wholesale; Semgrep is just *an* implementation of the [finding contract](architecture.md#the-finding-contract), swappable for your own linter or house script | You write instructions; a fixed vendor pipeline interprets them |
 
 And the honest limits: inhousecode has no full-codebase multi-agent sweep, no
 hosted infrastructure, no dashboard, and it depends on an AI CLI (Copilot,

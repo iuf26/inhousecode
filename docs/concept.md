@@ -61,14 +61,25 @@ what informed it without silently changing policy mid-run.
 
 Two phases, in order, and they are not interchangeable:
 
-1. **A deterministic floor first.** Semgrep runs before any model sees the
-   diff. No opinions, no context window, no charm — just pattern matching for
-   the objectively bad stuff (injection, hard-coded secrets, unsafe
-   deserialization). This is the check a hallucinating reviewer can't talk
-   its way around, because it isn't a reviewer at all.
-2. **An AI review that knows your team.** Once the floor holds, an AI
-   reviewer reads the PR description, the diff, and a frozen snapshot of your
-   governed knowledge, then reports the exact line, rule provenance, and fix.
+```mermaid
+flowchart LR
+    A["Your diff"] --> P1
+    subgraph P1["Phase 1 — Semgrep"]
+        direction TB
+        S1["Deterministic pattern match<br/>no model, no opinion"]
+    end
+    P1 -->|floor holds| P2
+    subgraph P2["Phase 2 — AI review"]
+        direction TB
+        S2["Reads the diff + your team's<br/>governed OpenViking knowledge"]
+    end
+    P2 --> V["Finding: exact line,<br/>rule cited, fix suggested"]
+```
+
+| Phase | Checks for | Who/what decides |
+|---|---|---|
+| **1 — Semgrep** (deterministic) | Injection, hard-coded secrets, unsafe deserialization — the objectively bad stuff | Pattern matching; no model, so nothing to talk it out of a finding |
+| **2 — AI review** | Everything else, read against your team's own rules | A model, but only once the floor already held, and only citing knowledge your team approved |
 
 Findings split by how much judgment they require. Critical and high-severity
 issues get fixed automatically and re-checked — they're not opinions, so
@@ -76,6 +87,11 @@ your attention shouldn't be spent approving them. Medium and low findings get
 listed, numbered, and left to you — those *are* opinions, and a tool that
 silently rewrites your code because it prefers a different shape isn't
 reviewing, it's editing.
+
+| Severity | Who fixes it | Your attention |
+|---|---|---|
+| **CRITICAL / HIGH** | Fixed automatically, then re-checked | None needed — it wasn't a judgment call |
+| **MEDIUM / LOW** | Listed, numbered | Yours — unless you opt into `--fix` / `review.fixByDefault` |
 
 It can run at commit time, or the moment your coding agent finishes
 generating — whichever point you'd rather catch things.
