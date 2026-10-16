@@ -146,6 +146,14 @@ class IntegrationTests(unittest.TestCase):
         allowlist = content.split("Pass these review flags through unchanged", 1)[1]
         self.assertIn("`--adversarial`", allowlist)
 
+    def test_shipped_skill_runs_static_check_through_the_harness_own_terminal(self):
+        content = SHIPPED_SKILL.read_text(encoding="utf-8")
+        self.assertIn("static-check emit", content)
+        self.assertIn("static-check consume --report", content)
+        self.assertIn("own terminal/", content)
+        self.assertIn("do not route it through a model", content)
+        self.assertIn("Do not read, summarize, or act on the Semgrep JSON report", content)
+
     def test_rejects_unknown_harness_and_action(self):
         with self.assertRaisesRegex(integrations.IntegrationError, "harness"):
             self.call("install", "claude")

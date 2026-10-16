@@ -19,6 +19,27 @@ Exit codes: `0` pass or override, `1` blocked, `2` usage error.
 
 Bypass every hook once with `git commit --no-verify`.
 
+## Running the static check through your own terminal
+
+`review` runs Semgrep as a subprocess inside `inhousecode`. For an AI harness
+that would rather run the deterministic Semgrep command itself, through its
+own command-execution tool, `static-check` splits that into two steps:
+
+```bash
+inhousecode static-check emit --worktree
+# prints the exact semgrep command to run, and where to write its report
+<run the printed command yourself>
+inhousecode static-check consume --report <path printed above> --worktree
+```
+
+`consume` prints the same finding table and verdict a normal
+`review --mode static` run would, and exits `0` pass, `1` blocking findings,
+`2` usage error -- the same contract as `review`. A missing or
+error-carrying report is `unavailable`, never a pass. This two-step form
+exists for harness integrations (see
+[harness-commands.md](harness-commands.md#run-semgrep-through-the-harnesss-own-terminal-tool));
+a standalone terminal session should just use `inhousecode review`.
+
 ## Fix every finding by default
 
 Repairs are opt-in. To make every review repair all static and AI findings,

@@ -31,6 +31,11 @@ inhousecode $VERSION - smart review gate for AI-generated code
 USAGE
   inhousecode review [options]     run the review gates
   inhousecode show <number>        show one finding and its source excerpt
+  inhousecode static-check emit [target]     print the exact Semgrep command
+                                    for a harness to run itself
+  inhousecode static-check consume --report <path> [target]
+                                    validate a report a harness produced and
+                                    print the static finding report
   inhousecode explain              open a session over the last findings
   inhousecode init                 create .inhousecode/ in this repository
   inhousecode install-hooks [...]  install the pre-commit and/or agent-stop hook
@@ -548,6 +553,177 @@ cmd_review() {
   exit $EXIT_PASS
 }
 
+STATIC_CHECK_CACHE_DIRNAME="static-check"
+
+# Resolve just the review target (staged/worktree/diff/path/pr) for a
+# static-check invocation. A subset of parse_review_args: target flags are
+# honored, review-only flags (--fix, --mode, --adversarial, etc.) are parsed
+# and silently ignored since static-check never fixes or reviews with AI.
+static_check_resolve_target() {
+  parse_review_args "$@"
+  [ -n "$PR_REFERENCE" ] && resolve_pr_target
+  [ "$TARGET_MODE" = "diff" ] && resolve_diff_base
+}
+
+# inhousecode static-check emit [target flags]
+#
+# Materializes the exact files a harness-run Semgrep pass must scan, and
+# prints one JSON envelope naming the exact command to run. Never invokes
+# semgrep itself -- that is the point: a harness (Hermes, Codex, ...) runs the
+# printed command through its own command-execution tool, so the deterministic
+# scan is visible there instead of hidden inside this process's subprocess.
+static_check_emit() {
+  static_check_resolve_target "$@"
+  local cache_root="$REPO_ROOT/.inhousecode/cache/$STATIC_CHECK_CACHE_DIRNAME"
+  rm -rf "$cache_root"
+  mkdir -p "$cache_root" || { fail "inhousecode: could not create $cache_root"; exit $EXIT_USAGE; }
+  # Bind this emit to its exact target so a later consume cannot be run
+  # against a directory left over from a different target (e.g. emit
+  # --staged, then accidentally consume --worktree).
+  printf '%s\n' "$TARGET_MODE" "$TARGET_PATH" "${DIFF_MERGE_BASE:-}" "${DIFF_HEAD:-}" \
+    > "$cache_root/target-binding.txt"
+  local envelope
+  envelope="$(INHOUSECODE_STATIC_EMIT_ONLY=1 \
+    INHOUSECODE_TARGET_MODE="$TARGET_MODE" \
+    INHOUSECODE_TARGET_PATH="$TARGET_PATH" \
+    INHOUSECODE_DIFF_BASE="${DIFF_MERGE_BASE:-}" \
+    INHOUSECODE_DIFF_HEAD="${DIFF_HEAD:-HEAD}" \
+    INHOUSECODE_DIFF_SOURCE="${DIFF_SOURCE:-commit}" \
+    INHOUSECODE_SEMGREP_CONFIGS="$INHOUSECODE_STATIC_SEMGREP_CONFIGS" \
+    INHOUSECODE_CACHE_ROOT="$cache_root" \
+    bash "$INHOUSECODE_HOME/lib/static_scan.sh")" || exit $EXIT_USAGE
+  resolve_python || { fail "inhousecode: Python 3 is required."; exit $EXIT_USAGE; }
+  local status reason
+  status="$(printf '%s' "$envelope" | "${PYTHON_CMD[@]}" -c \
+    'import json,sys; print(json.load(sys.stdin).get("scan_status",""))')"
+  reason="$(printf '%s' "$envelope" | "${PYTHON_CMD[@]}" -c \
+    'import json,sys; print(json.load(sys.stdin).get("scan_reason",""))')"
+  case "$status" in
+    pending-external)
+      say "${C_BOLD}Run this command yourself${C_RESET} (do not hand it to a model to interpret):"
+      printf '%s' "$envelope" | "${PYTHON_CMD[@]}" -c \
+        'import json,sys,shlex; print(shlex.join(json.load(sys.stdin)["external_argv"]))'
+      say ""
+      say "Then run:"
+      printf '%s' "$envelope" | "${PYTHON_CMD[@]}" -c \
+        'import json,sys,shlex; e=json.load(sys.stdin); print(shlex.join(["inhousecode","static-check","consume","--report",e["external_report"]]+sys.argv[1:]))' "$@"
+      ;;
+    skipped)
+      good "inhousecode: nothing to scan ($reason)."
+      rm -rf "$cache_root"
+      ;;
+    unavailable)
+      fail "inhousecode: static-check emit could not prepare a scan: $reason"
+      rm -rf "$cache_root"
+      exit $EXIT_USAGE
+      ;;
+  esac
+  say ""
+  say "Full envelope:"
+  printf '%s\n' "$envelope"
+}
+
+# inhousecode static-check consume --report <path> [target flags]
+#
+# Validates the report an external (harness-run) Semgrep invocation produced
+# for a prior "static-check emit" against the same target, and prints the
+# same static finding report / verdict the in-process scan would have
+# produced. A missing, empty, or error-carrying report is unavailable, never
+# a pass -- the finding contract and invariant 1 (malformed is never a pass)
+# apply identically whether semgrep ran in-process or externally.
+static_check_consume() {
+  local report=""
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --report)
+        shift
+        [ "$#" -gt 0 ] || { fail "inhousecode: --report needs a path."; exit $EXIT_USAGE; }
+        report="$1"
+        ;;
+      *) break ;;
+    esac
+    shift
+  done
+  [ -n "$report" ] || {
+    fail "inhousecode: static-check consume needs --report <path>."
+    exit $EXIT_USAGE
+  }
+  static_check_resolve_target "$@"
+
+  local cache_root="$REPO_ROOT/.inhousecode/cache/$STATIC_CHECK_CACHE_DIRNAME"
+  [ -d "$cache_root" ] || {
+    fail "inhousecode: no pending static-check emit found for this target."
+    fail "  Run 'inhousecode static-check emit' first, run the command it prints, then consume."
+    exit $EXIT_USAGE
+  }
+  # The target must match the emit this cache directory was created for.
+  # Without this, "emit --staged" followed by "consume --worktree" would
+  # silently validate a report against the wrong file list.
+  local expected_binding actual_binding
+  expected_binding="$(printf '%s\n' "$TARGET_MODE" "$TARGET_PATH" "${DIFF_MERGE_BASE:-}" "${DIFF_HEAD:-}")"
+  actual_binding="$(cat "$cache_root/target-binding.txt" 2>/dev/null)"
+  if [ "$expected_binding" != "$actual_binding" ]; then
+    fail "inhousecode: this consume targets a different review than the last 'static-check emit'."
+    fail "  Re-run 'inhousecode static-check emit' with the same target flags first."
+    exit $EXIT_USAGE
+  fi
+  # The report must be the exact path emit named for this cache directory --
+  # never an arbitrary file the caller points at. Otherwise a caller could
+  # hand-write or reuse an unrelated "clean" report and skip real scanning
+  # entirely, which the scan-tree hash check above does not catch on its own
+  # since it only verifies the SCANNED TREE, not which report file is trusted.
+  local expected_report="$cache_root/static-external/semgrep.json"
+  if [ "$(cd "$(dirname "$report")" 2>/dev/null && pwd)/$(basename "$report")" != \
+      "$(cd "$(dirname "$expected_report")" 2>/dev/null && pwd)/$(basename "$expected_report")" ]; then
+    fail "inhousecode: --report must be the exact path printed by 'static-check emit'."
+    fail "  Expected: $expected_report"
+    exit $EXIT_USAGE
+  fi
+  resolve_python || { fail "inhousecode: Python 3 is required."; exit $EXIT_USAGE; }
+
+  local envelope="$cache_root/scan-envelope.json" output rc
+  INHOUSECODE_STATIC_CONSUME_MODE=1 \
+    INHOUSECODE_STATIC_CONSUME_REPORT="$report" \
+    INHOUSECODE_TARGET_MODE="$TARGET_MODE" \
+    INHOUSECODE_TARGET_PATH="$TARGET_PATH" \
+    INHOUSECODE_DIFF_BASE="${DIFF_MERGE_BASE:-}" \
+    INHOUSECODE_DIFF_HEAD="${DIFF_HEAD:-HEAD}" \
+    INHOUSECODE_DIFF_SOURCE="${DIFF_SOURCE:-commit}" \
+    INHOUSECODE_SEMGREP_CONFIGS="$INHOUSECODE_STATIC_SEMGREP_CONFIGS" \
+    INHOUSECODE_CACHE_ROOT="$cache_root" \
+    bash "$INHOUSECODE_HOME/lib/static_scan.sh" > "$envelope" || {
+      rm -rf "$cache_root"
+      fail "inhousecode: could not resolve the static-check target."
+      exit $EXIT_USAGE
+    }
+
+  output="$(INHOUSECODE_CACHE_ROOT="$cache_root" "${PYTHON_CMD[@]}" \
+    "$INHOUSECODE_HOME/lib/static_report.py" "$envelope")"
+  rc=$?
+  printf '%s\n' "$output"
+  rm -rf "$cache_root"
+  # static_report.py's own exit codes are 0 pass, 1 blocking, 2 unavailable.
+  # Unavailable blocks exactly like a blocking finding would -- it is never
+  # treated as a usage error, and never treated as a pass.
+  if [ "$rc" -eq 0 ]; then
+    exit $EXIT_PASS
+  else
+    exit $EXIT_BLOCKED
+  fi
+}
+
+cmd_static_check() {
+  require_repo
+  load_config || exit $EXIT_USAGE
+  local sub="${1:-}"
+  [ "$#" -gt 0 ] && shift
+  case "$sub" in
+    emit)    static_check_emit "$@" ;;
+    consume) static_check_consume "$@" ;;
+    *) fail "inhousecode: static-check must be 'emit' or 'consume'."; exit $EXIT_USAGE ;;
+  esac
+}
+
 # --- explain -----------------------------------------------------------------
 
 cmd_show() {
@@ -986,6 +1162,7 @@ main() {
   [ "$#" -gt 0 ] && shift
   case "$command" in
     review)          cmd_review "$@" ;;
+    static-check)    cmd_static_check "$@" ;;
     show)            cmd_show "$@" ;;
     explain)         cmd_explain "$@" ;;
     init)            cmd_init "$@" ;;

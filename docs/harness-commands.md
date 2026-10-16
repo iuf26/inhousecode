@@ -77,6 +77,30 @@ Afterward, `show <number>` displays only one saved finding without invoking a
 model. Both displays identify whether the rule came from promoted project
 knowledge, promoted global knowledge, Semgrep, or built-in review guidance.
 
+## Run Semgrep through the harness's own terminal tool
+
+`review` normally runs Semgrep as a subprocess inside `inhousecode` itself.
+`static-check` instead has the harness run the deterministic Semgrep command
+through its own terminal/exec tool -- no AI model involved, only the harness's
+command-runner -- and hands the resulting report back for validation:
+
+```text
+# Hermes
+/inhousecode static-check worktree
+
+# Codex
+$inhousecode static-check worktree
+```
+
+This is three steps under the hood: `inhousecode static-check emit` prints
+the exact Semgrep command and materializes the files to scan; the harness
+runs that command verbatim with its own terminal tool; then
+`inhousecode static-check consume --report <path>` validates the report and
+prints the same finding table and verdict a normal `review --mode static`
+run would. A model never reads the diff to guess at findings, and never
+interprets the Semgrep JSON report -- both steps are deterministic. A
+missing or error-carrying report is reported `unavailable`, never a pass.
+
 ## Select Codex as the review backend
 
 The harness command and the review backend are independent. For example, a

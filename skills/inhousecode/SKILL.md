@@ -53,6 +53,10 @@ call; the canonical CLI is the only allowed state-changing interface.
 4. Run exactly one translated command with the harness terminal/shell tool and a
    timeout suitable for an AI review. Do not run a second review merely to
    summarize the first.
+   The `static-check` form below is the one deliberate exception: it is three
+   separate commands by design, because its whole point is that the harness's
+   own terminal tool runs the Semgrep step directly, instead of inhousecode
+   hiding it inside its own subprocess.
 5. Return the real exit status. For `review`: Return the complete output verbatim
    in a text block; do not replace it with a finding summary. Preserve all source excerpts,
    stable finding numbers, rules, provenance, and highlighted problem-line markers.
@@ -91,6 +95,20 @@ review pr <id-or-url> [extra review flags]
 review adversarial [staged|worktree]
   -> inhousecode review --adversarial --staged
   -> inhousecode review --adversarial --worktree
+
+static-check <target-flags>
+  -> inhousecode static-check emit <target-flags>
+  Then run the printed Semgrep command YOURSELF through your own terminal/
+  exec tool, verbatim, exactly as printed -- do not paraphrase, reorder, or
+  substitute arguments, and do not route it through a model; it is a
+  deterministic command, not something to interpret.
+  Then: inhousecode static-check consume --report <path printed above> <same target-flags>
+  Return the consume step's output verbatim, exactly like `review`'s output
+  contract: preserve finding numbers, severities, and the verdict line.
+  <target-flags> is one of --staged, --worktree, --path <path>, --diff <base>,
+  or --pr <id-or-url>, matching the `review` forms above. If emit reports
+  scan_status "skipped" or "unavailable", stop there -- there is nothing to
+  run, or nothing can be prepared; do not invent a Semgrep invocation.
 
 explain
   -> inhousecode explain
@@ -153,6 +171,13 @@ supplies `--no-fix`, pass it through even if `--fix` also appears; the CLI gives
   governed context; it does not rewrite review mechanics.
 - Never stage, commit, push, or bypass the gate.
 - Do not hide a blocked verdict or convert it into a successful adapter result.
+- For `static-check`, run the emitted Semgrep command exactly as printed, with
+  your terminal/exec tool, never by asking a model to read the diff and guess
+  at findings. Do not read, summarize, or act on the Semgrep JSON report
+  yourself -- pass its path to `static-check consume` unmodified and return
+  that command's output verbatim. The deterministic-floor guarantee (Semgrep
+  runs before any model opines) depends on neither step being interpreted by
+  a model.
 
 ## Verification
 
