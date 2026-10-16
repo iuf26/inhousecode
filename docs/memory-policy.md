@@ -34,6 +34,21 @@ letting retrieved content silently change the judge.
 
 ## Canonical namespace
 
+```mermaid
+flowchart TD
+    R["viking://resources/inhousecode/memory-policy/"]
+    R --> SC["_schema/<br/>record types, fields, statuses"]
+    R --> G["global/<br/>approved, cross-repository knowledge"]
+    R --> P["projects/&lt;encoded-repository-id&gt;/"]
+    P --> PE["_review_evidence/<br/>frozen snapshot manifests"]
+    R --> CM["candidate_memory/"]
+    CM --> IN["inbox/<br/>unclassified"]
+    CM --> CL["classified/<br/>scoped, pending promotion"]
+    CM --> QT["quarantine/<br/>unrelated / injection-like"]
+```
+
+Exact paths, for copying:
+
 ```text
 viking://resources/inhousecode/memory-policy/
 ├── _schema/
@@ -131,6 +146,23 @@ It applies policy filters before semantic ranking:
 Scope, status, expiry, supersession, quarantine, and provenance are trust
 controls. An embedding score is only a relevance signal.
 
+```mermaid
+flowchart LR
+    Rv["Review starts"] --> Res["Resolver runs once"]
+    Res --> Sf["Built-in safety<br/>+ review contract"]
+    Res --> Pj["Project knowledge<br/>(this repository)"]
+    Res --> Gl["Global knowledge<br/>(all repositories)"]
+    Res --> Cd["Relevant candidates<br/>(unverified evidence)"]
+    Sf --> Snap["Frozen snapshot<br/>URIs + scores + hash"]
+    Pj --> Snap
+    Gl --> Snap
+    Cd --> Snap
+    Snap --> Pr["Primary reviewer"]
+    Snap --> Le["Adversarial lenses"]
+    Snap --> Sy["Synthesis"]
+    Snap --> So["Second opinion"]
+```
+
 The resolver runs once per review. It creates a bounded in-process snapshot with
 record URIs, retrieval scores, filters, timestamps, and a content hash. The same
 bytes reach the primary reviewer, adversarial lenses, synthesis, and second
@@ -175,6 +207,16 @@ inhousecode memory promote <candidate-id> \
 
 OpenViking can learn experience from conversations. inhousecode feeds it review
 outcomes and reads the result back as candidates. Opt in per repository:
+
+```mermaid
+flowchart LR
+    Rv["Review with findings,<br/>override, or preference"] --> Sv["inhousecode writes<br/>one OpenViking session"]
+    Sv --> Ex["OpenViking extracts<br/>memory_diff.json<br/>(async)"]
+    Ex --> Hv["inhousecode memory harvest<br/>(scheduled, e.g. daily)"]
+    Hv --> Ib["candidate_memory/inbox"]
+    Ib -->|"seen N times,<br/>fixed real code,<br/>not overridden"| Pm["Automatic project<br/>promotion"]
+    Ib -->|"security / suppression /<br/>conflicting"| Hm["Human review"]
+```
 
 ```json
 {
